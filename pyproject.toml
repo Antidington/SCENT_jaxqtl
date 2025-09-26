@@ -1,0 +1,13 @@
+[project]
+name = "scent-jaxqtl"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "jaxqtl",
+    "lineax>=0.0.8",
+    "qtl>=0.1.10",
+]
+
+[tool.uv.sources]
+jaxqtl = { path = "jaxqtl", editable = true }

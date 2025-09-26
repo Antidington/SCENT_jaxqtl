@@ -1,0 +1,6 @@
+[submodule "jaxqtl"]
+	path = jaxqtl
+	url = git@github.com:mancusolab/jaxqtl.git
+[submodule "SCENT"]
+	path = SCENT
+	url = git@github.com:immunogenomics/SCENT.git
