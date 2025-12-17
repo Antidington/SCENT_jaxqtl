@@ -16,16 +16,16 @@ from jaxqtl.infer.stderr import FisherInfoError
 
 def interp_pval(q: ArrayLike) -> float:
     """Interpolate a p-value from quantiles that should be "null scaled"
-    
+
     Args:
         q: Bootstrap quantiles, centered so that under the null, theta = 0
-        
+
     Returns:
         Two-sided p-value
     """
     R = len(q)
     tstar = jnp.sort(q)
-    zero = jnp.sum(tstar < 0)
+    zero = jnp.sum(tstar <= 0)  # Use <= to match R's findInterval behavior
     
     # Handle extreme cases
     if zero == 0 or zero == R:
