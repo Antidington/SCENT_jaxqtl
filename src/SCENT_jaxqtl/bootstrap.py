@@ -77,8 +77,8 @@ def bootstrap_regression(
     eta, alpha_n = glm.calc_eta_and_dispersion(X_boot, y_boot, jnp.zeros_like(y_boot))
     glm_state = glm.fit(X_boot, y_boot, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
     
-    # Return coefficient for ATAC
-    return glm_state.beta[atac_idx].item()
+    # Return coefficient for ATAC (as JAX array, not Python scalar)
+    return glm_state.beta[atac_idx]
 
 
 def bootstrap_test(
