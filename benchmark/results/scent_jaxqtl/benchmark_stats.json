@@ -1,0 +1,24 @@
+[
+  {
+    "method": "SCENT_jaxQTL",
+    "dataset": "small",
+    "cell_type": "T_cell",
+    "regression": "poisson",
+    "bootstrap_samples": 100,
+    "n_genes": 100,
+    "n_peaks": 300,
+    "n_cells": 500,
+    "n_pairs_tested": 170,
+    "n_results": 166,
+    "n_sig_001": 20,
+    "n_sig_005": 26,
+    "n_sig_010": 30,
+    "load_time": 0.019353866577148438,
+    "analysis_time": 36.510884284973145,
+    "save_time": 0.004520893096923828,
+    "total_time": 36.53475904464722,
+    "seed": 42,
+    "jax_version": "0.6.2",
+    "jax_backend": "cpu"
+  }
+]

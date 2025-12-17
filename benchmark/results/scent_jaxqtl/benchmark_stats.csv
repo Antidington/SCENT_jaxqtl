@@ -1,0 +1,2 @@
+method,dataset,cell_type,regression,bootstrap_samples,n_genes,n_peaks,n_cells,n_pairs_tested,n_results,n_sig_001,n_sig_005,n_sig_010,load_time,analysis_time,save_time,total_time,seed,jax_version,jax_backend
+SCENT_jaxQTL,small,T_cell,poisson,100,100,300,500,170,166,20,26,30,0.019353866577148438,36.510884284973145,0.004520893096923828,36.53475904464722,42,0.6.2,cpu

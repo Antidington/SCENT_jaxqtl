@@ -1,0 +1,2 @@
+"method","dataset","cell_type","regression","ncores","bin","n_genes","n_peaks","n_cells","n_pairs_tested","n_results","n_sig_001","n_sig_005","n_sig_010","load_time","analysis_time","save_time","total_time","seed","r_version"
+"SCENT_R","small","T_cell","poisson",6,TRUE,100,300,500,170,166,22,29,33,0.0198259353637695,469.971353054047,0.00366711616516113,469.994846105576,42,"4.2.1"

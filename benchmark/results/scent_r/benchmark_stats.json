@@ -1,0 +1,24 @@
+[
+  {
+    "method": "SCENT_R",
+    "dataset": "small",
+    "cell_type": "T_cell",
+    "regression": "poisson",
+    "ncores": 6,
+    "bin": true,
+    "n_genes": 100,
+    "n_peaks": 300,
+    "n_cells": 500,
+    "n_pairs_tested": 170,
+    "n_results": 166,
+    "n_sig_001": 22,
+    "n_sig_005": 29,
+    "n_sig_010": 33,
+    "load_time": 0.0198,
+    "analysis_time": 469.9714,
+    "save_time": 0.0037,
+    "total_time": 469.9948,
+    "seed": 42,
+    "r_version": "4.2.1"
+  }
+]
