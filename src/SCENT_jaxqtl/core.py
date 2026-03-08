@@ -4,24 +4,26 @@
 # E-mail      : wenjichen.big@gmail.com / wenjichen@cncb.ac.cn
 # @Description: Core SCENT functionality using jaxqtl
 
-from typing import Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 import jax.random as rdm
+import numpy as np
 import pandas as pd
-from jaxtyping import Array, ArrayLike
+from pandas.api.types import is_bool_dtype, is_numeric_dtype
+from jaxtyping import ArrayLike
 
-from jaxqtl.families.distribution import ExponentialFamily, NegativeBinomial, Poisson
+from jaxqtl.families.distribution import NegativeBinomial, Poisson
 from jaxqtl.infer.glm import GLM
-from jaxqtl.infer.stderr import ErrVarEstimation, FisherInfoError
+from jaxqtl.infer.stderr import FisherInfoError
 
-from .bootstrap import basic_p, bootstrap_test
+from .bootstrap import bootstrap_test
 
 
 class SCENTResult(NamedTuple):
     """Results from SCENT analysis"""
+
     gene: str
     peak: str
     beta: float
@@ -33,9 +35,10 @@ class SCENTResult(NamedTuple):
 
 class SCENTObject(eqx.Module):
     """SCENT object for single-cell epigenome and transcriptome analysis"""
+
     rna: ArrayLike  # RNA expression matrix (genes x cells)
     atac: ArrayLike  # ATAC accessibility matrix (peaks x cells)
-    meta_data: Dict  # Metadata with cell information
+    meta_data: pd.DataFrame  # Metadata with cell information
     peak_info: Optional[Dict] = None  # Gene-peak pairs information
     peak_info_list: Optional[List] = None  # List of gene-peak pairs for parallelization
     covariates: List[str] = eqx.field(default_factory=list)  # Covariate names
@@ -45,24 +48,99 @@ class SCENTObject(eqx.Module):
     peak_names: Optional[List[str]] = None  # List of peak names
 
     def __post_init__(self):
-        """Validate dimensions of the input data"""
-        # Check if RNA and ATAC have the same number of cells
+        """Validate dimensions and schema of the input data."""
         if self.rna.shape[1] != self.atac.shape[1]:
             raise ValueError(
                 f"RNA matrix has {self.rna.shape[1]} cells but ATAC matrix has {self.atac.shape[1]} cells. "
-                f"They should have the same number of cells."
+                "They should have the same number of cells."
             )
 
-        # Check if peak_info genes are in gene_names
+        if not isinstance(self.meta_data, pd.DataFrame):
+            raise ValueError("meta_data must be a pandas DataFrame.")
+
+        if "cell" not in self.meta_data.columns:
+            raise ValueError("meta_data must contain a 'cell' column for merge-by-cell alignment.")
+
+        if self.celltypes and self.celltypes not in self.meta_data.columns:
+            raise ValueError(f"Cell type column '{self.celltypes}' not found in meta_data.")
+
+        missing_covariates = [covar for covar in self.covariates if covar not in self.meta_data.columns]
+        if missing_covariates:
+            raise ValueError(f"Covariates not found in meta_data: {missing_covariates}")
+
+        if isinstance(self.rna, pd.DataFrame) and isinstance(self.atac, pd.DataFrame):
+            if not self.rna.columns.equals(self.atac.columns):
+                raise ValueError("RNA and ATAC matrices must share the same ordered cell columns.")
+
+            missing_cells = sorted(set(self.rna.columns) - set(self.meta_data["cell"]))
+            if missing_cells:
+                raise ValueError(f"Some RNA/ATAC cells are missing in meta_data: {missing_cells[:5]}")
+
         if self.peak_info is not None and self.gene_names is not None and self.peak_names is not None:
-            genes = self.peak_info.get('genes', [])
+            genes = self.peak_info.get("genes", [])
             if not all(gene in self.gene_names for gene in genes):
                 raise ValueError("Some genes in peak_info are not in the RNA matrix")
 
-            # Check if peak_info peaks are in peak_names
-            peaks = self.peak_info.get('peaks', [])
+            peaks = self.peak_info.get("peaks", [])
             if not all(peak in self.peak_names for peak in peaks):
                 raise ValueError("Some peaks in peak_info are not in the ATAC matrix")
+
+    @staticmethod
+    def _iter_gene_peak_pairs(peak_info: Optional[Dict], peak_info_list: Optional[List]) -> List[Tuple[str, str]]:
+        """Return ordered gene-peak pairs; prefer peak_info row order like R implementation."""
+        if peak_info is not None and "pairs" in peak_info:
+            return [(str(gene), str(peak)) for gene, peak in peak_info["pairs"]]
+
+        if peak_info_list:
+            return [(str(item["gene"]), str(item["peak"])) for item in peak_info_list]
+
+        return []
+
+    @staticmethod
+    def _encode_covariates(df2: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
+        """Build predictor matrix with R-like order: atac first, then covariates."""
+        predictors = pd.DataFrame(index=df2.index)
+        predictors["atac"] = pd.to_numeric(df2["atac"], errors="coerce")
+
+        for covar in covariates:
+            series = df2[covar]
+            if is_bool_dtype(series) or is_numeric_dtype(series):
+                predictors[covar] = pd.to_numeric(series, errors="coerce")
+            else:
+                # Approximate R treatment-contrast coding: sorted levels, first level as baseline.
+                series_str = series.astype("string")
+                levels = sorted(series_str.dropna().unique().tolist())
+                for level in levels[1:]:
+                    col_name = f"{covar}{level}"
+                    predictors[col_name] = (series_str == level).astype(float)
+
+        return predictors
+
+    @classmethod
+    def _build_design_matrix(cls, df2: pd.DataFrame, covariates: Sequence[str]) -> Tuple[ArrayLike, ArrayLike, List[str]]:
+        """Construct model inputs aligned with exprs ~ atac + covariates."""
+        y_series = pd.to_numeric(df2["exprs"], errors="coerce").rename("exprs")
+        X_df = cls._encode_covariates(df2, covariates)
+        model_df = pd.concat([y_series, X_df], axis=1).dropna()
+
+        if model_df.empty:
+            return jnp.zeros((0, 0)), jnp.zeros((0, 1)), []
+
+        feature_df = model_df.drop(columns=["exprs"])
+        feature_names = ["(Intercept)"] + feature_df.columns.tolist()
+
+        X_np = np.column_stack(
+            [
+                np.ones(feature_df.shape[0], dtype=float),
+                feature_df.to_numpy(dtype=float),
+            ]
+        )
+        y_np = model_df["exprs"].to_numpy(dtype=float).reshape(-1, 1)
+
+        X = jnp.asarray(X_np)
+        y = jnp.asarray(y_np)
+
+        return X, y, feature_names
 
     def run_scent(
         self,
@@ -73,23 +151,16 @@ class SCENTObject(eqx.Module):
         bootstrap_samples: int = 100,
         key: Optional[rdm.PRNGKey] = None,
     ) -> List[SCENTResult]:
-        """Run SCENT algorithm on the data
+        """Run SCENT algorithm with code path aligned to the original R implementation.
 
-        Args:
-            celltype: Cell type to analyze
-            ncores: Number of cores for parallelization
-            regr: Regression type ("poisson" or "negbin")
-            bin_atac: Whether to binarize ATAC data
-            bootstrap_samples: Initial number of bootstrap samples
-            key: Random key for reproducibility
-
-        Returns:
-            List of SCENT results
+        Notes:
+            ncores is retained for API compatibility. Parallelism is controlled by JAX runtime.
         """
+        del ncores
+
         if key is None:
             key = rdm.PRNGKey(0)
 
-        # Select family based on regression type
         if regr == "poisson":
             family = Poisson()
         elif regr == "negbin":
@@ -97,86 +168,75 @@ class SCENTObject(eqx.Module):
         else:
             raise ValueError(f"Regression type {regr} not supported. Use 'poisson' or 'negbin'.")
 
-        results = []
+        if not isinstance(self.rna, pd.DataFrame) or not isinstance(self.atac, pd.DataFrame):
+            raise ValueError("run_scent currently requires RNA and ATAC as pandas DataFrames.")
 
-        # Process each gene-peak pair
-        for gene_peak_pair in self.peak_info_list:
-            gene = gene_peak_pair['gene']
-            peak = gene_peak_pair['peak']
+        res: List[SCENTResult] = []
+        gene_peak_pairs = self._iter_gene_peak_pairs(self.peak_info, self.peak_info_list)
 
-            # Extract data for this gene and peak
-            # Both rna and atac are now DataFrames with .loc support
-            gene_expr = self.rna.loc[gene].values
-            peak_access = self.atac.loc[peak].values
+        for gene, this_peak in gene_peak_pairs:
+            if gene not in self.rna.index or this_peak not in self.atac.index:
+                continue
 
-            # Binarize ATAC data if requested
+            atac_target = pd.DataFrame(
+                {
+                    "cell": self.atac.columns,
+                    "atac": pd.to_numeric(self.atac.loc[this_peak], errors="coerce").to_numpy(dtype=float),
+                }
+            )
+
             if bin_atac:
-                peak_access = (peak_access > 0).astype(float)
+                atac_target.loc[atac_target["atac"] > 0, "atac"] = 1.0
 
-            # Filter by cell type
-            cell_type_mask = self.meta_data[self.celltypes] == celltype
+            mrna_target = pd.to_numeric(self.rna.loc[gene], errors="coerce")
+            df = pd.DataFrame({"cell": mrna_target.index, "exprs": mrna_target.to_numpy(dtype=float)})
+            df = df.merge(atac_target, on="cell")
+            df = df.merge(self.meta_data, on="cell")
 
-            # Get cell type specific data
-            gene_expr_ct = gene_expr[cell_type_mask]
-            peak_access_ct = peak_access[cell_type_mask]
+            df2 = df[df[self.celltypes] == celltype]
+            if df2.empty:
+                continue
 
-            # Check if there's enough non-zero data
-            nonzero_expr = (gene_expr_ct > 0).mean()
-            nonzero_atac = (peak_access_ct > 0).mean()
+            nonzero_m = (df2["exprs"] > 0).mean()
+            nonzero_a = (df2["atac"] > 0).mean()
+            if not (nonzero_m > 0.05 and nonzero_a > 0.05):
+                continue
 
-            if nonzero_expr > 0.05 and nonzero_atac > 0.05:
-                # Prepare design matrix and response
-                n_samples = len(gene_expr_ct)
+            X, y, feature_names = self._build_design_matrix(df2, self.covariates)
+            if X.shape[0] == 0 or "atac" not in feature_names:
+                continue
 
-                X = jnp.ones((n_samples, 1))  # Intercept
+            glm = GLM(family=family)
+            eta, alpha_n = glm.calc_eta_and_dispersion(X, y, jnp.zeros_like(y))
+            glm_state = glm.fit(X, y, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
 
-                # Add covariates
-                for covar in self.covariates:
-                    covar_data = self.meta_data.loc[cell_type_mask, covar].values
-                    # Convert categorical variables to numeric codes
-                    if covar_data.dtype == object or covar_data.dtype.name == 'category':
-                        covar_data = pd.Categorical(covar_data).codes.astype(float)
-                    X = jnp.column_stack((X, covar_data))
+            atac_idx = feature_names.index("atac")
+            coef = float(glm_state.beta[atac_idx].item())
+            se = float(glm_state.se[atac_idx].item())
+            z = float(glm_state.z[atac_idx].item())
+            p = float(glm_state.p[atac_idx].item())
 
-                # Add ATAC as the last column
-                X = jnp.column_stack((X, peak_access_ct))
+            key, pair_key = rdm.split(key)
+            p0 = bootstrap_test(
+                X=X,
+                y=y,
+                family=family,
+                initial_samples=bootstrap_samples,
+                key=pair_key,
+                atac_idx=atac_idx,
+                obs_coef=coef,
+            )
 
-                y = jnp.array(gene_expr_ct).reshape(-1, 1)
-
-                # Run regression
-                glm = GLM(family=family)
-
-                # Fit model
-                eta, alpha_n = glm.calc_eta_and_dispersion(X, y, jnp.zeros_like(y))
-                glm_state = glm.fit(X, y, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
-
-                # Get coefficient for ATAC
-                atac_idx = X.shape[1] - 1  # Last column is ATAC
-                coef = glm_state.beta[atac_idx].item()
-                se = glm_state.se[atac_idx].item()
-                z = glm_state.z[atac_idx].item()
-                p = glm_state.p[atac_idx].item()
-
-                # Run bootstrap if p-value is promising
-                boot_p = p
-                if p < 0.1:
-                    # Perform bootstrap with increasing sample sizes
-                    boot_p = bootstrap_test(
-                        X, y, family, bootstrap_samples, key, 
-                        p_threshold=p, atac_idx=atac_idx
-                    )
-
-                # Store result
-                result = SCENTResult(
+            res.append(
+                SCENTResult(
                     gene=gene,
-                    peak=peak,
+                    peak=this_peak,
                     beta=coef,
                     se=se,
                     z=z,
                     p=p,
-                    boot_basic_p=boot_p
+                    boot_basic_p=p0,
                 )
-                results.append(result)
+            )
 
-        # Don't try to modify the immutable object
-        return results
+        return res
