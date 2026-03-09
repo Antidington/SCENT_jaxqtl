@@ -48,7 +48,15 @@ class SCENTObject(eqx.Module):
     peak_names: Optional[List[str]] = None  # List of peak names
 
     def __post_init__(self):
-        """Validate dimensions and schema of the input data."""
+        """Description:
+            Validate dimensions and required schema of the SCENT object.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self.rna.shape[1] != self.atac.shape[1]:
             raise ValueError(
                 f"RNA matrix has {self.rna.shape[1]} cells but ATAC matrix has {self.atac.shape[1]} cells. "
@@ -87,7 +95,16 @@ class SCENTObject(eqx.Module):
 
     @staticmethod
     def _iter_gene_peak_pairs(peak_info: Optional[Dict], peak_info_list: Optional[List]) -> List[Tuple[str, str]]:
-        """Return ordered gene-peak pairs; prefer peak_info row order like R implementation."""
+        """Description:
+            Return ordered gene-peak pairs, preferring peak_info row order to match the R path.
+
+        Args:
+            peak_info: Dictionary containing gene/peak lists and optional pair tuples.
+            peak_info_list: Fallback list of {'gene', 'peak'} dictionaries.
+
+        Returns:
+            Ordered list of (gene, peak) tuples.
+        """
         if peak_info is not None and "pairs" in peak_info:
             return [(str(gene), str(peak)) for gene, peak in peak_info["pairs"]]
 
@@ -98,7 +115,16 @@ class SCENTObject(eqx.Module):
 
     @staticmethod
     def _encode_covariates(df2: pd.DataFrame, covariates: Sequence[str]) -> pd.DataFrame:
-        """Build predictor matrix with R-like order: atac first, then covariates."""
+        """Description:
+            Build predictor columns with R-like order: atac first, then covariates.
+
+        Args:
+            df2: Cell type filtered data table with atac and covariate columns.
+            covariates: Covariate column names to encode.
+
+        Returns:
+            DataFrame of encoded predictor columns.
+        """
         predictors = pd.DataFrame(index=df2.index)
         predictors["atac"] = pd.to_numeric(df2["atac"], errors="coerce")
 
@@ -118,7 +144,16 @@ class SCENTObject(eqx.Module):
 
     @classmethod
     def _build_design_matrix(cls, df2: pd.DataFrame, covariates: Sequence[str]) -> Tuple[ArrayLike, ArrayLike, List[str]]:
-        """Construct model inputs aligned with exprs ~ atac + covariates."""
+        """Description:
+            Construct model inputs aligned with exprs ~ atac + covariates.
+
+        Args:
+            df2: Cell type filtered data table.
+            covariates: Covariate column names to include in the model.
+
+        Returns:
+            Tuple of design matrix X, response vector y, and feature names.
+        """
         y_series = pd.to_numeric(df2["exprs"], errors="coerce").rename("exprs")
         X_df = cls._encode_covariates(df2, covariates)
         model_df = pd.concat([y_series, X_df], axis=1).dropna()
@@ -151,10 +186,20 @@ class SCENTObject(eqx.Module):
         bootstrap_samples: int = 100,
         key: Optional[rdm.PRNGKey] = None,
     ) -> List[SCENTResult]:
-        """Run SCENT algorithm with code path aligned to the original R implementation.
+        """Description:
+            Run SCENT with a code path aligned to the original R implementation.
+            ncores is retained for API compatibility; runtime parallelism is controlled by JAX.
 
-        Notes:
-            ncores is retained for API compatibility. Parallelism is controlled by JAX runtime.
+        Args:
+            celltype: Target cell type label used for filtering.
+            ncores: Compatibility argument; currently not used for explicit threading.
+            regr: Regression family, either 'poisson' or 'negbin'.
+            bin_atac: Whether to binarize ATAC counts (>0 -> 1).
+            bootstrap_samples: Initial bootstrap sample size (stage-1).
+            key: Optional JAX PRNG key for reproducibility.
+
+        Returns:
+            List of SCENTResult entries for tested gene-peak pairs.
         """
         del ncores
 

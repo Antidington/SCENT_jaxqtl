@@ -13,7 +13,16 @@ from .core import SCENTObject, SCENTResult
 
 
 def read_matrix(file_path: str, sparse_format: bool = True):
-    """Read matrix from file."""
+    """Description:
+        Read a matrix file from disk in MTX, H5AD, CSV, or TSV format.
+
+    Args:
+        file_path: Path to the matrix file.
+        sparse_format: Whether CSV/TSV input should be returned as sparse matrix.
+
+    Returns:
+        Loaded matrix as sparse matrix, DataFrame, or backend-native matrix object.
+    """
     if file_path.endswith(".mtx"):
         mat = sparse.load_npz(file_path)
     elif file_path.endswith(".h5ad"):
@@ -40,7 +49,20 @@ def create_scent_object(
     covariates: Optional[List[str]] = None,
     celltype_col: str = "cell_type",
 ) -> SCENTObject:
-    """Create SCENTObject from files."""
+    """Description:
+        Create a SCENTObject from RNA, ATAC, metadata, and optional peak-info files.
+
+    Args:
+        rna_matrix: Path to RNA matrix file.
+        atac_matrix: Path to ATAC matrix file.
+        meta_data: Path to metadata file.
+        peak_info: Optional path to gene-peak pair file.
+        covariates: Optional list of covariate column names.
+        celltype_col: Metadata column name for cell type labels.
+
+    Returns:
+        Constructed and validated SCENTObject instance.
+    """
     covariates = covariates or []
 
     sep = "\t" if rna_matrix.endswith(".tsv") else ","
@@ -117,7 +139,16 @@ def create_scent_object(
 
 
 def write_results(results: List[SCENTResult], output_file: str) -> None:
-    """Write SCENT results to file."""
+    """Description:
+        Write SCENT analysis results to a delimited output file.
+
+    Args:
+        results: List of SCENTResult entries.
+        output_file: Output path ending with .csv or .tsv.
+
+    Returns:
+        None.
+    """
     columns = ["gene", "peak", "beta", "se", "z", "p", "boot_basic_p"]
     data = [
         {

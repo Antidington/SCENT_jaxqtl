@@ -17,7 +17,15 @@ from jaxqtl.infer.stderr import FisherInfoError
 
 
 def interp_pval(q: ArrayLike) -> float:
-    """Interpolate a p-value from quantiles that should be "null scaled"."""
+    """Description:
+        Interpolate a two-sided p-value from null-scaled bootstrap quantiles.
+
+    Args:
+        q: Bootstrap quantiles centered around the null.
+
+    Returns:
+        Interpolated two-sided p-value.
+    """
     R = len(q)
     tstar = jnp.sort(q)
     # Use <= to align with R's findInterval(0, tstar).
@@ -31,7 +39,17 @@ def interp_pval(q: ArrayLike) -> float:
 
 
 def basic_p(obs: float, boot: ArrayLike, null: float = 0) -> float:
-    """Derive a p-value from a vector of bootstrap samples using the basic calculation."""
+    """Description:
+        Compute the basic bootstrap p-value from observed and bootstrapped estimates.
+
+    Args:
+        obs: Observed parameter estimate.
+        boot: Bootstrap replicate estimates.
+        null: Null hypothesis value.
+
+    Returns:
+        Basic bootstrap p-value.
+    """
     return interp_pval(2 * obs - boot - null)
 
 
@@ -42,7 +60,19 @@ def bootstrap_regression(
     bootstrap_indices: ArrayLike,
     atac_idx: int,
 ) -> Array:
-    """Fit one bootstrap replicate and return the ATAC coefficient."""
+    """Description:
+        Fit one bootstrap replicate and extract the ATAC coefficient.
+
+    Args:
+        X: Design matrix.
+        y: Response vector.
+        family: GLM family object.
+        bootstrap_indices: Resampled row indices.
+        atac_idx: ATAC coefficient index in the fitted beta vector.
+
+    Returns:
+        ATAC coefficient from one bootstrap fit.
+    """
     X_boot = X[bootstrap_indices]
     y_boot = y[bootstrap_indices]
 
@@ -62,7 +92,21 @@ def _run_bootstrap_stage(
     obs_coef: float,
     n_boot: int,
 ) -> Tuple[float, rdm.PRNGKey]:
-    """Run one bootstrap stage with n_boot samples."""
+    """Description:
+        Run one adaptive bootstrap stage with a fixed number of replicates.
+
+    Args:
+        X: Design matrix.
+        y: Response vector.
+        family: GLM family object.
+        key: JAX PRNG key.
+        atac_idx: ATAC coefficient index.
+        obs_coef: Observed ATAC coefficient.
+        n_boot: Number of bootstrap replicates for this stage.
+
+    Returns:
+        Tuple of stage p-value and advanced PRNG key.
+    """
     n = X.shape[0]
     key, subkey = rdm.split(key)
     indices = rdm.choice(subkey, n, shape=(n_boot, n), replace=True)
@@ -82,7 +126,21 @@ def bootstrap_test(
     atac_idx: int = -1,
     obs_coef: Optional[float] = None,
 ) -> float:
-    """Perform adaptive bootstrap with stage sequence aligned to the R implementation."""
+    """Description:
+        Perform adaptive bootstrap with stage thresholds aligned to the R implementation.
+
+    Args:
+        X: Design matrix.
+        y: Response vector.
+        family: GLM family object.
+        initial_samples: Initial bootstrap sample size (stage-1).
+        key: JAX PRNG key.
+        atac_idx: ATAC coefficient index.
+        obs_coef: Optional observed ATAC coefficient; computed if not provided.
+
+    Returns:
+        Final adaptive bootstrap p-value.
+    """
     if initial_samples <= 0:
         raise ValueError("initial_samples must be > 0")
 
