@@ -102,6 +102,7 @@ def run_benchmark(
     print(f"  - Cell type: {cell_type}")
     print(f"  - Regression: {regression}")
     print(f"  - Bootstrap samples: {bootstrap_samples}")
+    print("  - RNG policy: pair-wise PRNG split + per-bootstrap-stage split (R-path alignment)")
 
     analysis_start = time.time()
 
@@ -191,6 +192,7 @@ def run_benchmark(
         "save_time": save_time,
         "total_time": total_time,
         "seed": seed,
+        "rng_policy": "pair-wise key split + per-stage key split",
         "jax_version": jax.__version__,
         "jax_backend": jax.default_backend()
     }
