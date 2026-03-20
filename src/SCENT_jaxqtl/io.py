@@ -4,146 +4,165 @@
 # E-mail      : Breezewjc952@gmail.com
 # @Description: I/O functions for SCENT
 
-import os
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 
-import jax.numpy as jnp
-import numpy as np
 import pandas as pd
 from scipy import sparse
 
 from .core import SCENTObject, SCENTResult
 
 
-def read_matrix(file_path: str, sparse_format: bool = True) -> sparse.csr_matrix:
-    """Read matrix from file
-    
+def read_matrix(file_path: str, sparse_format: bool = True):
+    """Description:
+        Read a matrix file from disk in MTX, H5AD, CSV, or TSV format.
+
     Args:
-        file_path: Path to matrix file
-        sparse_format: Whether to return as sparse matrix
-        
+        file_path: Path to the matrix file.
+        sparse_format: Whether CSV/TSV input should be returned as sparse matrix.
+
     Returns:
-        Matrix as sparse.csr_matrix or numpy.ndarray
+        Loaded matrix as sparse matrix, DataFrame, or backend-native matrix object.
     """
-    if file_path.endswith('.mtx'):
-        # Read MTX format
+    if file_path.endswith(".mtx"):
         mat = sparse.load_npz(file_path)
-    elif file_path.endswith('.h5ad'):
-        # Read H5AD format (AnnData)
+    elif file_path.endswith(".h5ad"):
         import anndata
+
         adata = anndata.read_h5ad(file_path)
         mat = adata.X
     else:
-        # Read CSV/TSV format
-        sep = '\t' if file_path.endswith('.tsv') else ','
+        sep = "\t" if file_path.endswith(".tsv") else ","
         df = pd.read_csv(file_path, sep=sep, index_col=0)
         if sparse_format:
             mat = sparse.csr_matrix(df.values)
         else:
-            mat = df.values
-    
+            mat = df
+
     return mat
 
 
 def create_scent_object(
-        rna_matrix: str,
-        atac_matrix: str,
-        meta_data: str,
-        peak_info: Optional[str] = None,
-        covariates: List[str] = [],
-        celltype_col: str = "cell_type"
+    rna_matrix: str,
+    atac_matrix: str,
+    meta_data: str,
+    peak_info: Optional[str] = None,
+    covariates: Optional[List[str]] = None,
+    celltype_col: str = "cell_type",
 ) -> SCENTObject:
-    """Create SCENTObject from files
+    """Description:
+        Create a SCENTObject from RNA, ATAC, metadata, and optional peak-info files.
 
     Args:
-        rna_matrix: Path to RNA matrix file
-        atac_matrix: Path to ATAC matrix file
-        meta_data: Path to metadata file
-        peak_info: Path to peak info file
-        covariates: List of covariate names
-        celltype_col: Column name for cell types
+        rna_matrix: Path to RNA matrix file.
+        atac_matrix: Path to ATAC matrix file.
+        meta_data: Path to metadata file.
+        peak_info: Optional path to gene-peak pair file.
+        covariates: Optional list of covariate column names.
+        celltype_col: Metadata column name for cell type labels.
 
     Returns:
-        SCENTObject
+        Constructed and validated SCENTObject instance.
     """
-    # Read RNA matrix - keep as DataFrame for easier indexing
-    sep = '\t' if rna_matrix.endswith('.tsv') else ','
-    if rna_matrix.endswith('.mtx') or rna_matrix.endswith('.h5ad'):
-        rna = read_matrix(rna_matrix)
-        gene_names = None  # Need to extract from feature data if available
+    covariates = covariates or []
+
+    sep = "\t" if rna_matrix.endswith(".tsv") else ","
+    if rna_matrix.endswith(".mtx") or rna_matrix.endswith(".h5ad"):
+        rna = read_matrix(rna_matrix, sparse_format=False)
     else:
         rna = pd.read_csv(rna_matrix, sep=sep, index_col=0)
-        gene_names = rna.index.tolist()
 
-    # Read ATAC matrix - keep as DataFrame for easier indexing
-    sep = '\t' if atac_matrix.endswith('.tsv') else ','
-    if atac_matrix.endswith('.mtx') or atac_matrix.endswith('.h5ad'):
-        atac = read_matrix(atac_matrix)
-        peak_names = None  # Need to extract from feature data if available
+    sep = "\t" if atac_matrix.endswith(".tsv") else ","
+    if atac_matrix.endswith(".mtx") or atac_matrix.endswith(".h5ad"):
+        atac = read_matrix(atac_matrix, sparse_format=False)
     else:
         atac = pd.read_csv(atac_matrix, sep=sep, index_col=0)
-        peak_names = atac.index.tolist()
 
-    # Read metadata
-    sep = '\t' if meta_data.endswith('.tsv') else ','
+    if not isinstance(rna, pd.DataFrame) or not isinstance(atac, pd.DataFrame):
+        raise ValueError("Strict R-path alignment requires tabular RNA/ATAC input with row and cell names.")
+
+    sep = "\t" if meta_data.endswith(".tsv") else ","
     meta_df = pd.read_csv(meta_data, sep=sep)
 
-    # Read peak info if provided
+    if "cell" not in meta_df.columns:
+        if "cell_id" in meta_df.columns:
+            meta_df = meta_df.rename(columns={"cell_id": "cell"})
+        else:
+            raise ValueError("Metadata must contain a 'cell' column.")
+
+    if celltype_col not in meta_df.columns:
+        raise ValueError(f"Cell type column '{celltype_col}' not found in metadata.")
+
+    missing_cov = [cov for cov in covariates if cov not in meta_df.columns]
+    if missing_cov:
+        raise ValueError(f"Covariates not found in metadata: {missing_cov}")
+
+    if not rna.columns.equals(atac.columns):
+        raise ValueError("RNA and ATAC matrices must have identical ordered cell columns.")
+
+    missing_meta = sorted(set(rna.columns) - set(meta_df["cell"]))
+    if missing_meta:
+        raise ValueError(f"Cells missing in metadata: {missing_meta[:5]}")
+
     peak_info_dict = None
     peak_info_list = None
     if peak_info is not None:
-        sep = '\t' if peak_info.endswith('.tsv') else ','
+        sep = "\t" if peak_info.endswith(".tsv") else ","
         peak_df = pd.read_csv(peak_info, sep=sep)
+        if peak_df.shape[1] < 2:
+            raise ValueError("peak_info must have at least two columns: gene and peak")
+
+        peak_df = peak_df.iloc[:, :2].copy()
+        peak_df.columns = ["gene", "peak"]
+
         peak_info_dict = {
-            'genes': peak_df.iloc[:, 0].tolist(),
-            'peaks': peak_df.iloc[:, 1].tolist(),
-            'pairs': list(zip(peak_df.iloc[:, 0], peak_df.iloc[:, 1]))
+            "genes": peak_df["gene"].astype(str).tolist(),
+            "peaks": peak_df["peak"].astype(str).tolist(),
+            "pairs": list(zip(peak_df["gene"].astype(str), peak_df["peak"].astype(str))),
         }
 
-        # Create list of gene-peak pairs for processing
         peak_info_list = [
-            {'gene': gene, 'peak': peak}
-            for gene, peak in zip(peak_df.iloc[:, 0], peak_df.iloc[:, 1])
+            {"gene": gene, "peak": peak}
+            for gene, peak in zip(peak_df["gene"].astype(str), peak_df["peak"].astype(str))
         ]
 
-    # Create SCENTObject - keep metadata as DataFrame for easier boolean indexing
-    scent_obj = SCENTObject(
+    return SCENTObject(
         rna=rna,
         atac=atac,
-        meta_data=meta_df,  # Keep as DataFrame
+        meta_data=meta_df,
         peak_info=peak_info_dict,
         peak_info_list=peak_info_list,
         covariates=covariates,
         celltypes=celltype_col,
-        gene_names=gene_names,
-        peak_names=peak_names
+        gene_names=rna.index.astype(str).tolist(),
+        peak_names=atac.index.astype(str).tolist(),
     )
-
-    return scent_obj
 
 
 def write_results(results: List[SCENTResult], output_file: str) -> None:
-    """Write SCENT results to file
+    """Description:
+        Write SCENT analysis results to a delimited output file.
 
     Args:
-        results: List of SCENT results
-        output_file: Path to output file
+        results: List of SCENTResult entries.
+        output_file: Output path ending with .csv or .tsv.
+
+    Returns:
+        None.
     """
-    # Convert results to DataFrame
-    data = []
-    for res in results:
-        data.append({
-            'gene': res.gene,
-            'peak': res.peak,
-            'beta': res.beta,
-            'se': res.se,
-            'z': res.z,
-            'p': res.p,
-            'boot_basic_p': res.boot_basic_p
-        })
+    columns = ["gene", "peak", "beta", "se", "z", "p", "boot_basic_p"]
+    data = [
+        {
+            "gene": res.gene,
+            "peak": res.peak,
+            "beta": res.beta,
+            "se": res.se,
+            "z": res.z,
+            "p": res.p,
+            "boot_basic_p": res.boot_basic_p,
+        }
+        for res in results
+    ]
 
-    df = pd.DataFrame(data)
-
-    # Write to file
-    sep = '\t' if output_file.endswith('.tsv') else ','
+    df = pd.DataFrame(data, columns=columns)
+    sep = "\t" if output_file.endswith(".tsv") else ","
     df.to_csv(output_file, sep=sep, index=False)

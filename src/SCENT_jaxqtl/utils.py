@@ -18,14 +18,15 @@ def create_peak_to_gene_list(
     temp_dir: str = "./temp",
     nbatch: int = 10
 ) -> List[Dict]:
-    """Create list of gene-peak pairs for parallelization
-    
+    """Description:
+        Create a list of gene-peak pairs for parallelized processing.
+
     Args:
         atac_peaks: List of peak names
         gene_bed_path: Path to gene bed file with 500kb windows
         temp_dir: Directory for temporary files
         nbatch: Number of batches to create
-        
+
     Returns:
         List of gene-peak pairs grouped into batches
     """
@@ -82,15 +83,16 @@ def preprocess_data(
     min_cells_per_gene: int = 10,
     min_cells_per_peak: int = 10
 ) -> Tuple[ArrayLike, ArrayLike, pd.DataFrame]:
-    """Preprocess RNA and ATAC data
-    
+    """Description:
+        Preprocess RNA and ATAC matrices by minimum non-zero cell filters.
+
     Args:
         rna_matrix: RNA expression matrix (genes x cells)
         atac_matrix: ATAC accessibility matrix (peaks x cells)
         meta_data: Metadata with cell information
         min_cells_per_gene: Minimum number of cells expressing a gene
         min_cells_per_peak: Minimum number of cells with peak accessibility
-        
+
     Returns:
         Filtered RNA matrix, ATAC matrix, and metadata
     """
