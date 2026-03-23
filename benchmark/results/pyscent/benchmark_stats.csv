@@ -1,0 +1,2 @@
+method,dataset,cell_type,regression,bootstrap_samples,n_genes,n_peaks,n_cells,n_pairs_tested,n_results,n_sig_001,n_sig_005,n_sig_010,load_time,analysis_time,save_time,total_time,seed,rng_policy,jax_version,jax_backend
+pySCENT,small,T_cell,poisson,100,100,300,500,170,166,22,29,33,0.012188911437988281,46.630350828170776,0.003677845001220703,46.646217584609985,42,pair-wise key split + per-stage key split,0.6.2,cpu

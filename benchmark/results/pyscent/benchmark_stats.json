@@ -1,0 +1,25 @@
+[
+  {
+    "method": "pySCENT",
+    "dataset": "small",
+    "cell_type": "T_cell",
+    "regression": "poisson",
+    "bootstrap_samples": 100,
+    "n_genes": 100,
+    "n_peaks": 300,
+    "n_cells": 500,
+    "n_pairs_tested": 170,
+    "n_results": 166,
+    "n_sig_001": 22,
+    "n_sig_005": 29,
+    "n_sig_010": 33,
+    "load_time": 0.012188911437988281,
+    "analysis_time": 46.630350828170776,
+    "save_time": 0.003677845001220703,
+    "total_time": 46.646217584609985,
+    "seed": 42,
+    "rng_policy": "pair-wise key split + per-stage key split",
+    "jax_version": "0.6.2",
+    "jax_backend": "cpu"
+  }
+]
