@@ -6,6 +6,7 @@
 
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
+import jax
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as rdm
@@ -19,6 +20,38 @@ from jaxqtl.infer.glm import GLM
 from jaxqtl.infer.stderr import FisherInfoError
 
 from .bootstrap import bootstrap_test
+
+
+def _resolve_device(device: str) -> jax.Device:
+    """Description:
+        Resolve a device string to a concrete ``jax.Device`` instance.
+
+        ``"auto"`` probes backends in order gpu → tpu → cpu and returns the
+        first available device.
+
+    Args:
+        device: One of ``"auto"``, ``"cpu"``, ``"gpu"``, or ``"tpu"``.
+
+    Returns:
+        A ``jax.Device`` object for the selected backend.
+    """
+    if device == "auto":
+        for backend in ("gpu", "tpu", "cpu"):
+            try:
+                devices = jax.devices(backend)
+                if devices:
+                    return devices[0]
+            except RuntimeError:
+                continue
+        return jax.devices("cpu")[0]
+
+    try:
+        devices = jax.devices(device)
+    except RuntimeError:
+        raise ValueError(f"JAX backend '{device}' is not available. Install the corresponding JAX build.")
+    if not devices:
+        raise ValueError(f"No {device} device found.")
+    return devices[0]
 
 
 class SCENTResult(NamedTuple):
@@ -223,6 +256,7 @@ class SCENTObject(eqx.Module):
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
         key: Optional[rdm.PRNGKey] = None,
+        device: str = "auto",
     ) -> List[SCENTResult]:
         """Description:
             Run SCENT with a code path aligned to the original R implementation.
@@ -235,6 +269,8 @@ class SCENTObject(eqx.Module):
             bin_atac: Whether to binarize ATAC counts (>0 -> 1).
             bootstrap_samples: Initial bootstrap sample size (stage-1).
             key: Optional JAX PRNG key for reproducibility.
+            device: JAX backend to use. ``"auto"`` (default) selects gpu → tpu → cpu
+                in priority order. Also accepts ``"cpu"``, ``"gpu"``, or ``"tpu"``.
 
         Returns:
             List of SCENTResult entries for tested gene-peak pairs.
@@ -254,6 +290,8 @@ class SCENTObject(eqx.Module):
         if self.gene_names is None or self.peak_names is None or self.cell_names is None:
             raise ValueError("gene_names, peak_names, and cell_names are required for run_scent.")
 
+        target_device = _resolve_device(device)
+
         # Build name -> row-index lookup dicts (analogous to R Dimnames indexing)
         gene_to_idx = {name: i for i, name in enumerate(self.gene_names)}
         peak_to_idx = {name: i for i, name in enumerate(self.peak_names)}
@@ -261,67 +299,70 @@ class SCENTObject(eqx.Module):
         res: List[SCENTResult] = []
         gene_peak_pairs = self._iter_gene_peak_pairs(self.peak_info, self.peak_info_list)
 
-        for gene, this_peak in gene_peak_pairs:
-            if gene not in gene_to_idx or this_peak not in peak_to_idx:
-                continue
+        # jax.default_device ensures all jnp.asarray / jax.vmap / GLM ops
+        # are dispatched to target_device without modifying downstream code.
+        with jax.default_device(target_device):
+            for gene, this_peak in gene_peak_pairs:
+                if gene not in gene_to_idx or this_peak not in peak_to_idx:
+                    continue
 
-            # Extract single peak row: sparse -> dense (R: object@atac[this_peak,])
-            atac_vec = self._sparse_row_to_dense(self.atac, peak_to_idx[this_peak])
-            atac_target = pd.DataFrame({"cell": self.cell_names, "atac": atac_vec})
+                # Extract single peak row: sparse -> dense (R: object@atac[this_peak,])
+                atac_vec = self._sparse_row_to_dense(self.atac, peak_to_idx[this_peak])
+                atac_target = pd.DataFrame({"cell": self.cell_names, "atac": atac_vec})
 
-            if bin_atac:
-                atac_target.loc[atac_target["atac"] > 0, "atac"] = 1.0
+                if bin_atac:
+                    atac_target.loc[atac_target["atac"] > 0, "atac"] = 1.0
 
-            # Extract single gene row: sparse -> dense (R: object@rna[gene,])
-            exprs_vec = self._sparse_row_to_dense(self.rna, gene_to_idx[gene])
-            df = pd.DataFrame({"cell": self.cell_names, "exprs": exprs_vec})
-            df = df.merge(atac_target, on="cell")
-            df = df.merge(self.meta_data, on="cell")
+                # Extract single gene row: sparse -> dense (R: object@rna[gene,])
+                exprs_vec = self._sparse_row_to_dense(self.rna, gene_to_idx[gene])
+                df = pd.DataFrame({"cell": self.cell_names, "exprs": exprs_vec})
+                df = df.merge(atac_target, on="cell")
+                df = df.merge(self.meta_data, on="cell")
 
-            df2 = df[df[self.celltypes] == celltype]
-            if df2.empty:
-                continue
+                df2 = df[df[self.celltypes] == celltype]
+                if df2.empty:
+                    continue
 
-            nonzero_m = (df2["exprs"] > 0).mean()
-            nonzero_a = (df2["atac"] > 0).mean()
-            if not (nonzero_m > 0.05 and nonzero_a > 0.05):
-                continue
+                nonzero_m = (df2["exprs"] > 0).mean()
+                nonzero_a = (df2["atac"] > 0).mean()
+                if not (nonzero_m > 0.05 and nonzero_a > 0.05):
+                    continue
 
-            X, y, feature_names = self._build_design_matrix(df2, self.covariates)
-            if X.shape[0] == 0 or "atac" not in feature_names:
-                continue
+                X, y, feature_names = self._build_design_matrix(df2, self.covariates)
+                if X.shape[0] == 0 or "atac" not in feature_names:
+                    continue
 
-            glm = GLM(family=family)
-            eta, alpha_n = glm.calc_eta_and_dispersion(X, y, jnp.zeros_like(y))
-            glm_state = glm.fit(X, y, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
+                glm = GLM(family=family)
+                eta, alpha_n = glm.calc_eta_and_dispersion(X, y, jnp.zeros_like(y))
+                glm_state = glm.fit(X, y, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
 
-            atac_idx = feature_names.index("atac")
-            coef = float(glm_state.beta[atac_idx].item())
-            se = float(glm_state.se[atac_idx].item())
-            z = float(glm_state.z[atac_idx].item())
-            p = float(glm_state.p[atac_idx].item())
+                atac_idx = feature_names.index("atac")
+                coef = float(glm_state.beta[atac_idx].item())
+                se = float(glm_state.se[atac_idx].item())
+                z = float(glm_state.z[atac_idx].item())
+                p = float(glm_state.p[atac_idx].item())
 
-            key, pair_key = rdm.split(key)
-            p0 = bootstrap_test(
-                X=X,
-                y=y,
-                family=family,
-                initial_samples=bootstrap_samples,
-                key=pair_key,
-                atac_idx=atac_idx,
-                obs_coef=coef,
-            )
-
-            res.append(
-                SCENTResult(
-                    gene=gene,
-                    peak=this_peak,
-                    beta=coef,
-                    se=se,
-                    z=z,
-                    p=p,
-                    boot_basic_p=p0,
+                key, pair_key = rdm.split(key)
+                p0 = bootstrap_test(
+                    X=X,
+                    y=y,
+                    family=family,
+                    initial_samples=bootstrap_samples,
+                    key=pair_key,
+                    atac_idx=atac_idx,
+                    obs_coef=coef,
                 )
-            )
+
+                res.append(
+                    SCENTResult(
+                        gene=gene,
+                        peak=this_peak,
+                        beta=coef,
+                        se=se,
+                        z=z,
+                        p=p,
+                        boot_basic_p=p0,
+                    )
+                )
 
         return res

@@ -51,21 +51,15 @@ pySCENT reimplements SCENT in Python using JAX, providing substantial performanc
 
 Using `uv` (recommended):
 ```bash
-# Clone repository
 git clone https://github.com/Antidington/pySCENT.git
 cd pySCENT
-
-# Install with uv
 uv sync
 ```
 
 Using `pip`:
 ```bash
-# Clone repository
 git clone https://github.com/Antidington/pySCENT.git
 cd pySCENT
-
-# Install in editable mode
 pip install -e .
 ```
 
@@ -76,7 +70,37 @@ Core dependencies (from `pyproject.toml`):
 - `lineax` ≥ 0.0.8 - Linear algebra operations
 - `qtl` ≥ 0.1.10 - QTL utilities
 
-JAX will be installed automatically. For GPU support, follow [JAX installation guide](https://github.com/google/jax#installation).
+### CPU vs GPU/TPU
+
+pySCENT runs on **CPU by default** — no extra configuration needed. To enable GPU or TPU acceleration, install the corresponding JAX build:
+
+**NVIDIA GPU (CUDA 12):**
+```bash
+# uv
+uv pip install -U "jax[cuda12]"
+
+# pip
+pip install -U "jax[cuda12]"
+```
+
+**Apple Silicon (Metal):**
+```bash
+pip install jax-metal
+```
+
+**Google Cloud TPU:**
+```bash
+pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+```
+
+Verify which backend is active:
+```python
+import jax
+print(jax.default_backend())  # "cpu", "gpu", or "tpu"
+print(jax.devices())          # list available devices
+```
+
+pySCENT does not require any code changes to switch backends — JAX automatically dispatches to the available accelerator. For more details, see the [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html).
 
 ---
 
@@ -103,7 +127,8 @@ results = scent_obj.run_scent(
     celltype="T_cell",                     # Cell type to analyze
     regr="poisson",                        # Regression model: "poisson" or "negbin"
     bootstrap_samples=100,                 # Initial bootstrap samples
-    key=random.PRNGKey(42)                 # Random seed for reproducibility
+    key=random.PRNGKey(42),                # Random seed for reproducibility
+    device="auto",                         # "auto" (gpu>tpu>cpu), "cpu", "gpu", "tpu"
 )
 
 # Save results
@@ -117,28 +142,37 @@ for res in sorted(results, key=lambda x: x.boot_basic_p)[:5]:
 
 ### Input Data Format
 
-**RNA matrix** (`rna_matrix.csv`):
+RNA and ATAC matrices are stored internally as sparse matrices (scipy CSR, analogous to R's `dgCMatrix`). The following input formats are supported:
+
+| Format | Extension | Row/Column Names |
+|--------|-----------|-----------------|
+| CSV | `.csv` | First column = row names, header = column names |
+| TSV | `.tsv` | Same as CSV, tab-separated |
+| H5AD | `.h5ad` | `var_names` = row names, `obs_names` = column names (auto-transposed from cells×genes to genes×cells) |
+| MTX | `.mtx`, `.mtx.gz` | Not available (requires CSV/TSV/H5AD for name information) |
+
+**RNA matrix** — genes × cells, raw counts (no normalization):
 ```
         Cell1  Cell2  Cell3  ...
 Gene1   10     5      8      ...
 Gene2   0      3      12     ...
 ```
 
-**ATAC matrix** (`atac_matrix.csv`):
+**ATAC matrix** — peaks × cells, raw counts:
 ```
                           Cell1  Cell2  Cell3  ...
 chr1:1000-2000            5      0      3      ...
 chr2:5000-6000            8      10     2      ...
 ```
 
-**Metadata** (`metadata.csv`):
+**Metadata** — one row per cell, must contain a `cell` (or `cell_id`) column:
 ```
 cell_id,cell_type,batch,n_counts
 Cell1,T_cell,batch1,5000
 Cell2,B_cell,batch1,4500
 ```
 
-**Peak info** (`peak_info.csv`):
+**Peak info** — gene-peak pairs to test (first two columns used):
 ```
 gene,peak
 Gene1,chr1:1000-2000
@@ -157,7 +191,3 @@ Results are saved as CSV with columns:
 - `boot_basic_p`: Bootstrap p-value (recommended)
 
 ---
-
-
-
-

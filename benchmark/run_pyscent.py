@@ -29,7 +29,8 @@ def run_benchmark(
     cell_type="T_cell",
     regression="poisson",
     bootstrap_samples=100,
-    seed=42
+    seed=42,
+    device="auto",
 ):
     """Run pySCENT benchmark on a dataset
 
@@ -41,6 +42,7 @@ def run_benchmark(
         regression: Regression type (poisson or negbin)
         bootstrap_samples: Initial number of bootstrap samples
         seed: Random seed
+        device: JAX device ("auto", "cpu", "gpu", "tpu")
 
     Returns:
         Dictionary with benchmark results
@@ -103,6 +105,7 @@ def run_benchmark(
     print(f"  - Regression: {regression}")
     print(f"  - Bootstrap samples: {bootstrap_samples}")
     print("  - RNG policy: pair-wise PRNG split + per-bootstrap-stage split (R-path alignment)")
+    print(f"  - Device: {device}")
 
     analysis_start = time.time()
 
@@ -111,7 +114,8 @@ def run_benchmark(
             celltype=cell_type,
             regr=regression,
             bootstrap_samples=bootstrap_samples,
-            key=key
+            key=key,
+            device=device,
         )
     except Exception as e:
         print(f"Error running SCENT: {e}")
@@ -258,6 +262,13 @@ def main():
         default=42,
         help="Random seed"
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu", "tpu"],
+        help="JAX device: auto (gpu>tpu>cpu), cpu, gpu, or tpu"
+    )
 
     args = parser.parse_args()
 
@@ -270,6 +281,7 @@ def main():
     print(f"  - Regression: {args.regression}")
     print(f"  - Bootstrap samples: {args.bootstrap_samples}")
     print(f"  - Random seed: {args.seed}")
+    print(f"  - Device: {args.device}")
     print(f"  - JAX backend: {jax.default_backend()}")
 
     # Run benchmarks
@@ -284,7 +296,8 @@ def main():
                 cell_type=args.cell_type,
                 regression=args.regression,
                 bootstrap_samples=args.bootstrap_samples,
-                seed=args.seed
+                seed=args.seed,
+                device=args.device,
             )
             all_stats.append(stats)
 
