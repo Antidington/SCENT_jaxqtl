@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Benchmark script for SCENT_jaxQTL
-Runs SCENT_jaxQTL on benchmark datasets and measures performance
+Benchmark script for pySCENT
+Runs pySCENT on benchmark datasets and measures performance
 """
 
 import os
@@ -19,7 +19,7 @@ import jax.random as random
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
-from SCENT_jaxqtl import io
+from pyscent import io
 
 
 def run_benchmark(
@@ -31,7 +31,7 @@ def run_benchmark(
     bootstrap_samples=100,
     seed=42
 ):
-    """Run SCENT_jaxQTL benchmark on a dataset
+    """Run pySCENT benchmark on a dataset
 
     Args:
         data_dir: Directory containing the dataset
@@ -46,7 +46,7 @@ def run_benchmark(
         Dictionary with benchmark results
     """
     print(f"\n{'='*60}")
-    print(f"Running SCENT_jaxQTL on {dataset_name} dataset")
+    print(f"Running pySCENT on {dataset_name} dataset")
     print(f"{'='*60}")
 
     # Set up paths
@@ -126,7 +126,7 @@ def run_benchmark(
 
     output_file = os.path.join(
         output_dir,
-        f"scent_jaxqtl_{dataset_name}_{cell_type}.csv"
+        f"pyscent_{dataset_name}_{cell_type}.csv"
     )
 
     save_start = time.time()
@@ -174,7 +174,7 @@ def run_benchmark(
 
     # Prepare benchmark statistics
     benchmark_stats = {
-        "method": "SCENT_jaxQTL",
+        "method": "pySCENT",
         "dataset": dataset_name,
         "cell_type": cell_type,
         "regression": regression,
@@ -212,7 +212,7 @@ def run_benchmark(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run SCENT_jaxQTL benchmark"
+        description="Run pySCENT benchmark"
     )
     parser.add_argument(
         "--data_dir",
@@ -223,7 +223,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="results/scent_jaxqtl",
+        default="results/pyscent",
         help="Output directory for results"
     )
     parser.add_argument(
@@ -262,7 +262,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "="*60)
-    print("SCENT_jaxQTL Benchmark")
+    print("pySCENT Benchmark")
     print("="*60)
     print(f"Configuration:")
     print(f"  - Datasets: {', '.join(args.datasets)}")
@@ -308,7 +308,7 @@ def main():
         print(f"✓ Benchmark statistics saved to: {csv_file}")
 
     print("\n" + "="*60)
-    print("✓ SCENT_jaxQTL benchmark completed!")
+    print("✓ pySCENT benchmark completed!")
     print("="*60 + "\n")
 
 

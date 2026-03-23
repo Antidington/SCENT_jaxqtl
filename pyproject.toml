@@ -1,13 +1,17 @@
 [project]
-name = "scent-jaxqtl"
+name = "pyscent"
 version = "0.1.0"
-description = "Add your description here"
+description = "SCENT reimplemented in Python with JAX-powered acceleration"
 requires-python = ">=3.10"
 dependencies = [
     "jaxqtl",
     "lineax>=0.0.8",
     "qtl>=0.1.10",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.uv.sources]
 jaxqtl = { path = "jaxqtl", editable = true }

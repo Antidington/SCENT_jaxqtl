@@ -1,13 +1,13 @@
-# SCENT_jaxQTL Benchmark
+# pySCENT Benchmark
 
-Comprehensive performance and accuracy comparison between SCENT_jaxQTL and the original SCENT (R implementation).
+Comprehensive performance and accuracy comparison between pySCENT and the original SCENT (R implementation).
 
 ---
 
 ## Benchmark Design
 
 ### Objective
-Validate that SCENT_jaxQTL:
+Validate that pySCENT:
 1. Produces statistically consistent results with original SCENT
 2. Achieves significant performance improvements
 3. Maintains high accuracy in detecting true gene-peak associations
@@ -31,7 +31,7 @@ Both implementations tested with identical:
 - Adaptive bootstrap strategy (100 → 500 → 2,500 → 25,000 → 50,000 samples)
 - Random seed (42) for reproducibility
 
-**Key difference**: SCENT_jaxQTL uses JAX for GPU-accelerated vectorized bootstrap via `jax.vmap`.
+**Key difference**: pySCENT uses JAX for GPU-accelerated vectorized bootstrap via `jax.vmap`.
 
 ---
 
@@ -39,7 +39,7 @@ Both implementations tested with identical:
 
 ### Prerequisites
 
-**SCENT_jaxQTL**:
+**pySCENT**:
 - Python ≥ 3.10
 - JAX, jaxqtl, pandas, scipy, numpy
 
@@ -62,9 +62,9 @@ Output: `data/small/` containing:
 
 ### Run Benchmarks
 
-**SCENT_jaxQTL**:
+**pySCENT**:
 ```bash
-uv run python run_scent_jaxqtl.py --datasets small --seed 42
+uv run python run_pyscent.py --datasets small --seed 42
 ```
 
 **SCENT (R)**:
@@ -91,10 +91,10 @@ Generates:
 | Method | Runtime | Speedup |
 |--------|---------|---------|
 | **SCENT (R)** | 469.97s | - |
-| **SCENT_jaxQTL** | 36.51s | **12.9×** |
+| **pySCENT** | 36.51s | **12.9×** |
 
 **Analysis time breakdown**:
-- SCENT_jaxQTL: 36.51s (99.9% of total)
+- pySCENT: 36.51s (99.9% of total)
 - SCENT R: 469.97s (100% of total)
 
 **Expected GPU performance**: 50-200× speedup based on parallelization potential.
@@ -110,7 +110,7 @@ Generates:
 - **Spearman correlation**: 0.763 ⭐⭐⭐⭐ (Good)
 
 **Significance agreement** (at p < 0.01):
-- SCENT_jaxQTL: 20 significant
+- pySCENT: 20 significant
 - SCENT R: 22 significant
 - **Both agree**: 19 (86.4% overlap)
 
@@ -120,14 +120,14 @@ Generates:
 
 | Method | Detected (p < 0.01) | Detection Rate | False Positives |
 |--------|---------------------|----------------|-----------------|
-| **SCENT_jaxQTL** | 18/20 | 90% | 2 |
+| **pySCENT** | 18/20 | 90% | 2 |
 | **SCENT R** | 18/20 | 90% | 4 |
 
 **Key finding**: Both methods detect the same 18 true associations with nearly identical effect sizes.
 
 ### Top Detected Associations
 
-| Gene | Peak | jaxQTL β | jaxQTL p | R β | R p |
+| Gene | Peak | pySCENT β | pySCENT p | R β | R p |
 |------|------|----------|----------|-----|-----|
 | GENE000096 | chr5-186588834-186589429 | 3.550 | 0.00004 | 3.545 | 0.00004 |
 | GENE000094 | chr20-205090234-205091926 | 3.495 | 0.00004 | 3.495 | 0.00004 |
@@ -146,9 +146,9 @@ Generates:
 1. **High statistical consistency**: 97.3% beta correlation, results highly reproducible
 2. **Significant performance gain**: 12.9× speedup on CPU (expected 50-200× on GPU)
 3. **Accurate detection**: 90% detection rate, matching original SCENT
-4. **Production ready**: SCENT_jaxQTL successfully replicates original SCENT
+4. **Production ready**: pySCENT successfully replicates original SCENT
 
-### Key Advantages of SCENT_jaxQTL
+### Key Advantages of pySCENT
 
 **Performance**:
 - 12.9× faster on CPU
@@ -167,7 +167,7 @@ Generates:
 
 ### Recommendations
 
-**Use SCENT_jaxQTL when**:
+**Use pySCENT when**:
 - Working with large datasets (>1000 cells)
 - Time-sensitive analysis required
 - GPU resources available
@@ -204,7 +204,7 @@ p < 0.001:  50,000 samples
 
 ### Environment
 
-**SCENT_jaxQTL**:
+**pySCENT**:
 - Python 3.10.17
 - JAX 0.6.2 (CPU backend)
 - Apple Silicon (M-series)
@@ -222,7 +222,7 @@ p < 0.001:  50,000 samples
 benchmark/
 ├── README.md                          # This file
 ├── generate_benchmark_data.py         # Data generation
-├── run_scent_jaxqtl.py               # SCENT_jaxQTL benchmark
+├── run_pyscent.py               # pySCENT benchmark
 ├── run_scent_r.R                     # SCENT R benchmark
 ├── compare_results.py                # Results comparison
 ├── data/small/                       # Test data
@@ -232,8 +232,8 @@ benchmark/
 │   ├── peak_info.csv
 │   └── true_associations.csv
 └── results/                          # Benchmark outputs
-    ├── scent_jaxqtl/
-    │   ├── scent_jaxqtl_small_T_cell.csv
+    ├── pyscent/
+    │   ├── pyscent_small_T_cell.csv
     │   └── benchmark_stats.csv
     ├── scent_r/
     │   ├── scent_r_small_T_cell.csv
@@ -247,4 +247,4 @@ benchmark/
 
 **Last updated**: 2025-12-17
 **Test status**: ✅ All tests passing
-**Version**: SCENT_jaxQTL v1.0
+**Version**: pySCENT v1.0

@@ -1,6 +1,6 @@
-# SCENT_jaxQTL
+# pySCENT
 
-A GPU-accelerated Python implementation of SCENT (Single-Cell ENhancer Target) for identifying cell-type specific enhancer-gene regulatory links from single-cell multi-omics data.
+SCENT reimplemented in Python with JAX-powered acceleration for high-performance computing.
 
 ---
 
@@ -32,32 +32,28 @@ SCENT identifies significant peak-gene associations in a cell-type specific mann
 
 ---
 
-## 2. SCENT_jaxQTL Features
+## 2. pySCENT Features
 
-SCENT_jaxQTL reimplements SCENT in Python using JAX, providing substantial performance improvements while maintaining statistical consistency with the original implementation.
+pySCENT reimplements SCENT in Python using JAX, providing substantial performance improvements while maintaining statistical consistency with the original implementation.
 
 ### Key Features
 
-**GPU/TPU Acceleration**: JAX-based computation enables hardware acceleration
-**High Consistency**: Validated against original SCENT
-**Adaptive Bootstrap Strategy**: Intelligent sampling for efficiency
-**Vectorized Parallelization**: `jax.vmap` for simultaneous bootstrap execution
+* **GPU/TPU Acceleration**: JAX-based computation enables hardware acceleration
+* **High Consistency**: Validated against original SCENT
+* **Adaptive Bootstrap Strategy**: Intelligent sampling for efficiency
+* **Vectorized Parallelization**: `jax.vmap` for simultaneous bootstrap execution
 
 ---
 
 ## 3. Installation
-
-### Prerequisites
-- Python ≥ 3.10
-- JAX (GPU support optional but recommended)
 
 ### Install from Source
 
 Using `uv` (recommended):
 ```bash
 # Clone repository
-git clone https://github.com/Antidington/SCENT_jaxqtl.git
-cd SCENT_jaxqtl
+git clone https://github.com/Antidington/pySCENT.git
+cd pySCENT
 
 # Install with uv
 uv sync
@@ -66,8 +62,8 @@ uv sync
 Using `pip`:
 ```bash
 # Clone repository
-git clone https://github.com/Antidington/SCENT_jaxqtl.git
-cd SCENT_jaxqtl
+git clone https://github.com/Antidington/pySCENT.git
+cd pySCENT
 
 # Install in editable mode
 pip install -e .
@@ -78,7 +74,6 @@ pip install -e .
 Core dependencies (from `pyproject.toml`):
 - `jaxqtl` - JAX-based QTL mapping library
 - `lineax` ≥ 0.0.8 - Linear algebra operations
-- `notebook` ≥ 7.4.6 - Jupyter notebook support
 - `qtl` ≥ 0.1.10 - QTL utilities
 
 JAX will be installed automatically. For GPU support, follow [JAX installation guide](https://github.com/google/jax#installation).
@@ -91,7 +86,7 @@ JAX will be installed automatically. For GPU support, follow [JAX installation g
 
 ```python
 import jax.random as random
-from SCENT_jaxqtl import io
+from pyscent import io
 
 # Create SCENT object from input files
 scent_obj = io.create_scent_object(

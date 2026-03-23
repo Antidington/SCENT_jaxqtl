@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Compare benchmark results between SCENT_jaxQTL and original SCENT (R)
+Compare benchmark results between pySCENT and original SCENT (R)
 Analyzes runtime performance and result consistency
 """
 
@@ -20,7 +20,7 @@ def load_results(results_dir, method, dataset, cell_type):
 
     Args:
         results_dir: Results directory
-        method: Method name (scent_jaxqtl or scent_r)
+        method: Method name (pyscent or scent_r)
         dataset: Dataset name
         cell_type: Cell type
 
@@ -38,11 +38,11 @@ def load_results(results_dir, method, dataset, cell_type):
     return df
 
 
-def compare_results(jaxqtl_results, r_results, dataset_name):
-    """Compare results between SCENT_jaxQTL and SCENT R
+def compare_results(pyscent_results, r_results, dataset_name):
+    """Compare results between pySCENT and SCENT R
 
     Args:
-        jaxqtl_results: DataFrame with SCENT_jaxQTL results
+        pyscent_results: DataFrame with pySCENT results
         r_results: DataFrame with SCENT R results
         dataset_name: Name of the dataset
 
@@ -53,26 +53,26 @@ def compare_results(jaxqtl_results, r_results, dataset_name):
     print(f"Comparing results for {dataset_name}")
     print(f"{'='*60}")
 
-    if jaxqtl_results is None or r_results is None:
+    if pyscent_results is None or r_results is None:
         print("  Error: Missing results for comparison")
         return None
 
     # Merge results on gene-peak pairs
     merged = pd.merge(
-        jaxqtl_results,
+        pyscent_results,
         r_results,
         on=['gene', 'peak'],
-        suffixes=('_jaxqtl', '_r'),
+        suffixes=('_pyscent', '_r'),
         how='outer',
         indicator=True
     )
 
-    n_jaxqtl_only = (merged['_merge'] == 'left_only').sum()
+    n_pyscent_only = (merged['_merge'] == 'left_only').sum()
     n_r_only = (merged['_merge'] == 'right_only').sum()
     n_both = (merged['_merge'] == 'both').sum()
 
     print(f"\nResult overlap:")
-    print(f"  - SCENT_jaxQTL only: {n_jaxqtl_only}")
+    print(f"  - pySCENT only: {n_pyscent_only}")
     print(f"  - SCENT R only: {n_r_only}")
     print(f"  - Both methods: {n_both}")
 
@@ -84,9 +84,9 @@ def compare_results(jaxqtl_results, r_results, dataset_name):
     both_results = merged[merged['_merge'] == 'both'].copy()
 
     # Compare coefficients (beta)
-    beta_corr = both_results['beta_jaxqtl'].corr(both_results['beta_r'])
-    beta_mae = np.mean(np.abs(both_results['beta_jaxqtl'] - both_results['beta_r']))
-    beta_rmse = np.sqrt(np.mean((both_results['beta_jaxqtl'] - both_results['beta_r'])**2))
+    beta_corr = both_results['beta_pyscent'].corr(both_results['beta_r'])
+    beta_mae = np.mean(np.abs(both_results['beta_pyscent'] - both_results['beta_r']))
+    beta_rmse = np.sqrt(np.mean((both_results['beta_pyscent'] - both_results['beta_r'])**2))
 
     print(f"\nCoefficient (beta) comparison:")
     print(f"  - Correlation: {beta_corr:.6f}")
@@ -95,7 +95,7 @@ def compare_results(jaxqtl_results, r_results, dataset_name):
 
     # Compare p-values
     p_corr = stats.spearmanr(
-        both_results['boot_basic_p_jaxqtl'],
+        both_results['boot_basic_p_pyscent'],
         both_results['boot_basic_p_r']
     )[0]
 
@@ -105,25 +105,25 @@ def compare_results(jaxqtl_results, r_results, dataset_name):
     # Compare significant results at different thresholds
     thresholds = [0.01, 0.05, 0.10]
     for thresh in thresholds:
-        jaxqtl_sig = (both_results['boot_basic_p_jaxqtl'] < thresh).sum()
+        pyscent_sig = (both_results['boot_basic_p_pyscent'] < thresh).sum()
         r_sig = (both_results['boot_basic_p_r'] < thresh).sum()
-        both_sig = ((both_results['boot_basic_p_jaxqtl'] < thresh) &
+        both_sig = ((both_results['boot_basic_p_pyscent'] < thresh) &
                     (both_results['boot_basic_p_r'] < thresh)).sum()
 
-        overlap = both_sig / max(jaxqtl_sig, r_sig) * 100 if max(jaxqtl_sig, r_sig) > 0 else 0
+        overlap = both_sig / max(pyscent_sig, r_sig) * 100 if max(pyscent_sig, r_sig) > 0 else 0
 
         print(f"\n  Significant at p < {thresh}:")
-        print(f"    - SCENT_jaxQTL: {jaxqtl_sig}")
+        print(f"    - pySCENT: {pyscent_sig}")
         print(f"    - SCENT R: {r_sig}")
         print(f"    - Agreement: {both_sig} ({overlap:.1f}%)")
 
     # Create comparison statistics dictionary
     comparison_stats = {
         'dataset': dataset_name,
-        'n_pairs_jaxqtl': len(jaxqtl_results),
+        'n_pairs_pyscent': len(pyscent_results),
         'n_pairs_r': len(r_results),
         'n_pairs_both': n_both,
-        'n_pairs_jaxqtl_only': n_jaxqtl_only,
+        'n_pairs_pyscent_only': n_pyscent_only,
         'n_pairs_r_only': n_r_only,
         'beta_correlation': beta_corr,
         'beta_mae': beta_mae,
@@ -133,12 +133,12 @@ def compare_results(jaxqtl_results, r_results, dataset_name):
 
     # Add significance overlap for each threshold
     for thresh in thresholds:
-        jaxqtl_sig = (both_results['boot_basic_p_jaxqtl'] < thresh).sum()
+        pyscent_sig = (both_results['boot_basic_p_pyscent'] < thresh).sum()
         r_sig = (both_results['boot_basic_p_r'] < thresh).sum()
-        both_sig = ((both_results['boot_basic_p_jaxqtl'] < thresh) &
+        both_sig = ((both_results['boot_basic_p_pyscent'] < thresh) &
                     (both_results['boot_basic_p_r'] < thresh)).sum()
 
-        comparison_stats[f'n_sig_{thresh}_jaxqtl'] = jaxqtl_sig
+        comparison_stats[f'n_sig_{thresh}_pyscent'] = pyscent_sig
         comparison_stats[f'n_sig_{thresh}_r'] = r_sig
         comparison_stats[f'n_sig_{thresh}_both'] = both_sig
 
@@ -165,19 +165,19 @@ def plot_comparisons(both_results, dataset_name, output_dir):
 
     # 1. Beta comparison scatter plot
     ax1 = axes[0, 0]
-    ax1.scatter(both_results['beta_r'], both_results['beta_jaxqtl'],
+    ax1.scatter(both_results['beta_r'], both_results['beta_pyscent'],
                 alpha=0.5, s=20)
     ax1.plot([both_results['beta_r'].min(), both_results['beta_r'].max()],
              [both_results['beta_r'].min(), both_results['beta_r'].max()],
              'r--', lw=2, label='Perfect agreement')
     ax1.set_xlabel('SCENT R: Beta coefficient', fontsize=12)
-    ax1.set_ylabel('SCENT_jaxQTL: Beta coefficient', fontsize=12)
+    ax1.set_ylabel('pySCENT: Beta coefficient', fontsize=12)
     ax1.set_title('Coefficient Comparison', fontsize=13, fontweight='bold')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
     # Add correlation text
-    corr = both_results['beta_jaxqtl'].corr(both_results['beta_r'])
+    corr = both_results['beta_pyscent'].corr(both_results['beta_r'])
     ax1.text(0.05, 0.95, f'Pearson r = {corr:.4f}',
              transform=ax1.transAxes, fontsize=11,
              verticalalignment='top',
@@ -186,22 +186,22 @@ def plot_comparisons(both_results, dataset_name, output_dir):
     # 2. P-value comparison scatter plot (log scale)
     ax2 = axes[0, 1]
     # Add small constant to avoid log(0)
-    p_jaxqtl = both_results['boot_basic_p_jaxqtl'].replace(0, 1e-10)
+    p_pyscent = both_results['boot_basic_p_pyscent'].replace(0, 1e-10)
     p_r = both_results['boot_basic_p_r'].replace(0, 1e-10)
 
-    ax2.scatter(np.log10(p_r), np.log10(p_jaxqtl), alpha=0.5, s=20)
+    ax2.scatter(np.log10(p_r), np.log10(p_pyscent), alpha=0.5, s=20)
     ax2.plot([np.log10(p_r).min(), np.log10(p_r).max()],
              [np.log10(p_r).min(), np.log10(p_r).max()],
              'r--', lw=2, label='Perfect agreement')
     ax2.set_xlabel('SCENT R: log10(p-value)', fontsize=12)
-    ax2.set_ylabel('SCENT_jaxQTL: log10(p-value)', fontsize=12)
+    ax2.set_ylabel('pySCENT: log10(p-value)', fontsize=12)
     ax2.set_title('P-value Comparison', fontsize=13, fontweight='bold')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     # Add Spearman correlation
     spearman = stats.spearmanr(
-        both_results['boot_basic_p_jaxqtl'],
+        both_results['boot_basic_p_pyscent'],
         both_results['boot_basic_p_r']
     )[0]
     ax2.text(0.05, 0.95, f'Spearman ρ = {spearman:.4f}',
@@ -211,15 +211,15 @@ def plot_comparisons(both_results, dataset_name, output_dir):
 
     # 3. Beta difference vs mean
     ax3 = axes[1, 0]
-    beta_mean = (both_results['beta_r'] + both_results['beta_jaxqtl']) / 2
-    beta_diff = both_results['beta_jaxqtl'] - both_results['beta_r']
+    beta_mean = (both_results['beta_r'] + both_results['beta_pyscent']) / 2
+    beta_diff = both_results['beta_pyscent'] - both_results['beta_r']
 
     ax3.scatter(beta_mean, beta_diff, alpha=0.5, s=20)
     ax3.axhline(y=0, color='r', linestyle='--', lw=2)
     ax3.axhline(y=beta_diff.mean(), color='b', linestyle='-', lw=1,
                 label=f'Mean diff = {beta_diff.mean():.4f}')
     ax3.set_xlabel('Mean Beta coefficient', fontsize=12)
-    ax3.set_ylabel('Beta difference (jaxQTL - R)', fontsize=12)
+    ax3.set_ylabel('Beta difference (pySCENT - R)', fontsize=12)
     ax3.set_title('Bland-Altman Plot (Beta)', fontsize=13, fontweight='bold')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
@@ -227,24 +227,24 @@ def plot_comparisons(both_results, dataset_name, output_dir):
     # 4. Significance agreement
     ax4 = axes[1, 1]
     thresholds = [0.01, 0.05, 0.10]
-    jaxqtl_counts = []
+    pyscent_counts = []
     r_counts = []
     both_counts = []
 
     for thresh in thresholds:
-        jaxqtl_sig = (both_results['boot_basic_p_jaxqtl'] < thresh).sum()
+        pyscent_sig = (both_results['boot_basic_p_pyscent'] < thresh).sum()
         r_sig = (both_results['boot_basic_p_r'] < thresh).sum()
-        both_sig = ((both_results['boot_basic_p_jaxqtl'] < thresh) &
+        both_sig = ((both_results['boot_basic_p_pyscent'] < thresh) &
                     (both_results['boot_basic_p_r'] < thresh)).sum()
 
-        jaxqtl_counts.append(jaxqtl_sig)
+        pyscent_counts.append(pyscent_sig)
         r_counts.append(r_sig)
         both_counts.append(both_sig)
 
     x = np.arange(len(thresholds))
     width = 0.25
 
-    ax4.bar(x - width, jaxqtl_counts, width, label='SCENT_jaxQTL', alpha=0.8)
+    ax4.bar(x - width, pyscent_counts, width, label='pySCENT', alpha=0.8)
     ax4.bar(x, r_counts, width, label='SCENT R', alpha=0.8)
     ax4.bar(x + width, both_counts, width, label='Both agree', alpha=0.8)
 
@@ -266,26 +266,26 @@ def plot_comparisons(both_results, dataset_name, output_dir):
     plt.close()
 
 
-def plot_performance(jaxqtl_stats, r_stats, output_dir):
+def plot_performance(pyscent_stats, r_stats, output_dir):
     """Create performance comparison plots
 
     Args:
-        jaxqtl_stats: List of SCENT_jaxQTL benchmark stats
+        pyscent_stats: List of pySCENT benchmark stats
         r_stats: List of SCENT R benchmark stats
         output_dir: Output directory for plots
     """
     os.makedirs(output_dir, exist_ok=True)
 
     # Convert to DataFrames
-    jaxqtl_df = pd.DataFrame(jaxqtl_stats)
+    pyscent_df = pd.DataFrame(pyscent_stats)
     r_df = pd.DataFrame(r_stats)
 
     # Merge on dataset
     merged_df = pd.merge(
-        jaxqtl_df[['dataset', 'total_time', 'analysis_time', 'n_pairs_tested']],
+        pyscent_df[['dataset', 'total_time', 'analysis_time', 'n_pairs_tested']],
         r_df[['dataset', 'total_time', 'analysis_time', 'n_pairs_tested']],
         on='dataset',
-        suffixes=('_jaxqtl', '_r')
+        suffixes=('_pyscent', '_r')
     )
 
     # Create figure
@@ -297,8 +297,8 @@ def plot_performance(jaxqtl_stats, r_stats, output_dir):
     x = np.arange(len(merged_df))
     width = 0.35
 
-    ax1.bar(x - width/2, merged_df['total_time_jaxqtl'], width,
-            label='SCENT_jaxQTL', alpha=0.8)
+    ax1.bar(x - width/2, merged_df['total_time_pyscent'], width,
+            label='pySCENT', alpha=0.8)
     ax1.bar(x + width/2, merged_df['total_time_r'], width,
             label='SCENT R', alpha=0.8)
 
@@ -312,14 +312,14 @@ def plot_performance(jaxqtl_stats, r_stats, output_dir):
 
     # Add speedup annotations
     for i, row in merged_df.iterrows():
-        speedup = row['total_time_r'] / row['total_time_jaxqtl']
-        ax1.text(i, max(row['total_time_r'], row['total_time_jaxqtl']) * 1.05,
+        speedup = row['total_time_r'] / row['total_time_pyscent']
+        ax1.text(i, max(row['total_time_r'], row['total_time_pyscent']) * 1.05,
                 f'{speedup:.1f}×', ha='center', fontsize=10, fontweight='bold')
 
     # 2. Analysis time comparison
     ax2 = axes[1]
-    ax2.bar(x - width/2, merged_df['analysis_time_jaxqtl'], width,
-            label='SCENT_jaxQTL', alpha=0.8)
+    ax2.bar(x - width/2, merged_df['analysis_time_pyscent'], width,
+            label='pySCENT', alpha=0.8)
     ax2.bar(x + width/2, merged_df['analysis_time_r'], width,
             label='SCENT R', alpha=0.8)
 
@@ -333,8 +333,8 @@ def plot_performance(jaxqtl_stats, r_stats, output_dir):
 
     # Add speedup annotations
     for i, row in merged_df.iterrows():
-        speedup = row['analysis_time_r'] / row['analysis_time_jaxqtl']
-        ax2.text(i, max(row['analysis_time_r'], row['analysis_time_jaxqtl']) * 1.05,
+        speedup = row['analysis_time_r'] / row['analysis_time_pyscent']
+        ax2.text(i, max(row['analysis_time_r'], row['analysis_time_pyscent']) * 1.05,
                 f'{speedup:.1f}×', ha='center', fontsize=10, fontweight='bold')
 
     plt.tight_layout()
@@ -352,8 +352,8 @@ def plot_performance(jaxqtl_stats, r_stats, output_dir):
     print(f"{'='*60}")
     for i, row in merged_df.iterrows():
         dataset = row['dataset']
-        total_speedup = row['total_time_r'] / row['total_time_jaxqtl']
-        analysis_speedup = row['analysis_time_r'] / row['analysis_time_jaxqtl']
+        total_speedup = row['total_time_r'] / row['total_time_pyscent']
+        analysis_speedup = row['analysis_time_r'] / row['analysis_time_pyscent']
         print(f"\n{dataset}:")
         print(f"  - Total speedup: {total_speedup:.2f}×")
         print(f"  - Analysis speedup: {analysis_speedup:.2f}×")
@@ -361,7 +361,7 @@ def plot_performance(jaxqtl_stats, r_stats, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare SCENT_jaxQTL and SCENT R benchmark results"
+        description="Compare pySCENT and SCENT R benchmark results"
     )
     parser.add_argument(
         "--results_dir",
@@ -398,15 +398,15 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load benchmark statistics
-    jaxqtl_stats_file = os.path.join(args.results_dir, "scent_jaxqtl", "benchmark_stats.json")
+    pyscent_stats_file = os.path.join(args.results_dir, "pyscent", "benchmark_stats.json")
     r_stats_file = os.path.join(args.results_dir, "scent_r", "benchmark_stats.json")
 
-    if os.path.exists(jaxqtl_stats_file):
-        with open(jaxqtl_stats_file) as f:
-            jaxqtl_stats = json.load(f)
+    if os.path.exists(pyscent_stats_file):
+        with open(pyscent_stats_file) as f:
+            pyscent_stats = json.load(f)
     else:
-        print(f"Warning: SCENT_jaxQTL stats not found: {jaxqtl_stats_file}")
-        jaxqtl_stats = []
+        print(f"Warning: pySCENT stats not found: {pyscent_stats_file}")
+        pyscent_stats = []
 
     if os.path.exists(r_stats_file):
         with open(r_stats_file) as f:
@@ -416,25 +416,25 @@ def main():
         r_stats = []
 
     # Compare performance
-    if jaxqtl_stats and r_stats:
-        plot_performance(jaxqtl_stats, r_stats, args.output_dir)
+    if pyscent_stats and r_stats:
+        plot_performance(pyscent_stats, r_stats, args.output_dir)
 
     # Compare results for each dataset
     all_comparison_stats = []
 
     for dataset in args.datasets:
         # Load results
-        jaxqtl_results = load_results(
-            args.results_dir, "scent_jaxqtl", dataset, args.cell_type
+        pyscent_results = load_results(
+            args.results_dir, "pyscent", dataset, args.cell_type
         )
         r_results = load_results(
             args.results_dir, "scent_r", dataset, args.cell_type
         )
 
         # Compare results
-        if jaxqtl_results is not None and r_results is not None:
+        if pyscent_results is not None and r_results is not None:
             comp_stats, both_results = compare_results(
-                jaxqtl_results, r_results, dataset
+                pyscent_results, r_results, dataset
             )
 
             if comp_stats is not None:
