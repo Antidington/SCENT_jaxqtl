@@ -4,41 +4,61 @@
 # E-mail      : Breezewjc952@gmail.com
 # @Description: I/O functions for SCENT
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from scipy import sparse
 
 from .core import SCENTObject, SCENTResult
 
 
-def read_matrix(file_path: str, sparse_format: bool = True):
+def read_matrix(
+    file_path: str,
+) -> Tuple[sparse.csr_matrix, Optional[List[str]], Optional[List[str]]]:
     """Description:
-        Read a matrix file from disk in MTX, H5AD, CSV, or TSV format.
+        Read a matrix file and return a sparse CSR matrix with row/column names.
+
+        Supported formats:
+          - CSV (.csv): comma-separated, first column as row names, header as column names
+          - TSV (.tsv): tab-separated, same layout as CSV
+          - MTX (.mtx): Matrix Market format via scipy.io.mmread (no names)
+          - H5AD (.h5ad): AnnData format (cells x genes); transposed to genes x cells
 
     Args:
         file_path: Path to the matrix file.
-        sparse_format: Whether CSV/TSV input should be returned as sparse matrix.
 
     Returns:
-        Loaded matrix as sparse matrix, DataFrame, or backend-native matrix object.
+        Tuple of (csr_matrix, row_names, col_names).
+        row_names / col_names may be None when names are unavailable (e.g. MTX).
     """
-    if file_path.endswith(".mtx"):
-        mat = sparse.load_npz(file_path)
-    elif file_path.endswith(".h5ad"):
+    if file_path.endswith(".mtx") or file_path.endswith(".mtx.gz"):
+        from scipy.io import mmread
+
+        mat = mmread(file_path)
+        return sparse.csr_matrix(mat), None, None
+
+    if file_path.endswith(".h5ad"):
         import anndata
 
         adata = anndata.read_h5ad(file_path)
-        mat = adata.X
-    else:
-        sep = "\t" if file_path.endswith(".tsv") else ","
-        df = pd.read_csv(file_path, sep=sep, index_col=0)
-        if sparse_format:
-            mat = sparse.csr_matrix(df.values)
+        # AnnData is cells(obs) x genes(var); transpose to genes x cells
+        X = adata.X
+        if sparse.issparse(X):
+            mat = sparse.csr_matrix(X.T)
         else:
-            mat = df
+            mat = sparse.csr_matrix(np.asarray(X).T)
+        row_names = adata.var_names.astype(str).tolist()
+        col_names = adata.obs_names.astype(str).tolist()
+        return mat, row_names, col_names
 
-    return mat
+    # CSV / TSV
+    sep = "\t" if file_path.endswith(".tsv") else ","
+    df = pd.read_csv(file_path, sep=sep, index_col=0)
+    row_names = df.index.astype(str).tolist()
+    col_names = df.columns.astype(str).tolist()
+    mat = sparse.csr_matrix(df.values, dtype=np.float64)
+    return mat, row_names, col_names
 
 
 def create_scent_object(
@@ -52,10 +72,14 @@ def create_scent_object(
     """Description:
         Create a SCENTObject from RNA, ATAC, metadata, and optional peak-info files.
 
+        All matrix formats supported by ``read_matrix`` are accepted.  Matrices
+        are stored internally as sparse CSR (analogous to R dgCMatrix) with
+        separate name lists for genes, peaks, and cells.
+
     Args:
-        rna_matrix: Path to RNA matrix file.
-        atac_matrix: Path to ATAC matrix file.
-        meta_data: Path to metadata file.
+        rna_matrix: Path to RNA matrix file (genes x cells).
+        atac_matrix: Path to ATAC matrix file (peaks x cells).
+        meta_data: Path to metadata file (CSV or TSV).
         peak_info: Optional path to gene-peak pair file.
         covariates: Optional list of covariate column names.
         celltype_col: Metadata column name for cell type labels.
@@ -65,21 +89,37 @@ def create_scent_object(
     """
     covariates = covariates or []
 
-    sep = "\t" if rna_matrix.endswith(".tsv") else ","
-    if rna_matrix.endswith(".mtx") or rna_matrix.endswith(".h5ad"):
-        rna = read_matrix(rna_matrix, sparse_format=False)
+    # --- Read matrices as sparse ---
+    rna, gene_names, rna_cell_names = read_matrix(rna_matrix)
+    atac, peak_names, atac_cell_names = read_matrix(atac_matrix)
+
+    # Determine cell names
+    if rna_cell_names is not None and atac_cell_names is not None:
+        if rna_cell_names != atac_cell_names:
+            raise ValueError("RNA and ATAC matrices must have identical ordered cell columns.")
+        cell_names = rna_cell_names
+    elif rna_cell_names is not None:
+        cell_names = rna_cell_names
+    elif atac_cell_names is not None:
+        cell_names = atac_cell_names
     else:
-        rna = pd.read_csv(rna_matrix, sep=sep, index_col=0)
+        raise ValueError(
+            "Cell names could not be determined from the input matrices. "
+            "Use CSV/TSV (with headers) or H5AD format to provide cell names."
+        )
 
-    sep = "\t" if atac_matrix.endswith(".tsv") else ","
-    if atac_matrix.endswith(".mtx") or atac_matrix.endswith(".h5ad"):
-        atac = read_matrix(atac_matrix, sparse_format=False)
-    else:
-        atac = pd.read_csv(atac_matrix, sep=sep, index_col=0)
+    if gene_names is None:
+        raise ValueError(
+            "Gene names could not be determined from the RNA matrix. "
+            "Use CSV/TSV (with row index) or H5AD format."
+        )
+    if peak_names is None:
+        raise ValueError(
+            "Peak names could not be determined from the ATAC matrix. "
+            "Use CSV/TSV (with row index) or H5AD format."
+        )
 
-    if not isinstance(rna, pd.DataFrame) or not isinstance(atac, pd.DataFrame):
-        raise ValueError("Strict R-path alignment requires tabular RNA/ATAC input with row and cell names.")
-
+    # --- Read metadata ---
     sep = "\t" if meta_data.endswith(".tsv") else ","
     meta_df = pd.read_csv(meta_data, sep=sep)
 
@@ -96,13 +136,11 @@ def create_scent_object(
     if missing_cov:
         raise ValueError(f"Covariates not found in metadata: {missing_cov}")
 
-    if not rna.columns.equals(atac.columns):
-        raise ValueError("RNA and ATAC matrices must have identical ordered cell columns.")
-
-    missing_meta = sorted(set(rna.columns) - set(meta_df["cell"]))
+    missing_meta = sorted(set(cell_names) - set(meta_df["cell"]))
     if missing_meta:
         raise ValueError(f"Cells missing in metadata: {missing_meta[:5]}")
 
+    # --- Read peak info ---
     peak_info_dict = None
     peak_info_list = None
     if peak_info is not None:
@@ -133,8 +171,9 @@ def create_scent_object(
         peak_info_list=peak_info_list,
         covariates=covariates,
         celltypes=celltype_col,
-        gene_names=rna.index.astype(str).tolist(),
-        peak_names=atac.index.astype(str).tolist(),
+        gene_names=gene_names,
+        peak_names=peak_names,
+        cell_names=cell_names,
     )
 
 

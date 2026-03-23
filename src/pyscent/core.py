@@ -4,7 +4,7 @@
 # E-mail      : wenjichen.big@gmail.com / wenjichen@cncb.ac.cn
 # @Description: Core SCENT functionality using jaxqtl
 
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -12,7 +12,7 @@ import jax.random as rdm
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
-from jaxtyping import ArrayLike
+from scipy import sparse
 
 from jaxqtl.families.distribution import NegativeBinomial, Poisson
 from jaxqtl.infer.glm import GLM
@@ -34,18 +34,24 @@ class SCENTResult(NamedTuple):
 
 
 class SCENTObject(eqx.Module):
-    """SCENT object for single-cell epigenome and transcriptome analysis"""
+    """SCENT object for single-cell epigenome and transcriptome analysis.
 
-    rna: ArrayLike  # RNA expression matrix (genes x cells)
-    atac: ArrayLike  # ATAC accessibility matrix (peaks x cells)
+    Mirrors the original R SCENT S4 class: matrices are stored as sparse
+    (scipy CSR, analogous to R dgCMatrix) while row/column names are kept
+    in separate lists (analogous to Dimnames slots).
+    """
+
+    rna: Any  # Sparse CSR matrix (genes x cells)
+    atac: Any  # Sparse CSR matrix (peaks x cells)
     meta_data: pd.DataFrame  # Metadata with cell information
     peak_info: Optional[Dict] = None  # Gene-peak pairs information
-    peak_info_list: Optional[List] = None  # List of gene-peak pairs for parallelization
+    peak_info_list: Optional[List] = None  # List of gene-peak pairs
     covariates: List[str] = eqx.field(default_factory=list)  # Covariate names
     celltypes: str = ""  # Column name for cell types
     results: List[SCENTResult] = eqx.field(default_factory=list)  # Analysis results
-    gene_names: Optional[List[str]] = None  # List of gene names
-    peak_names: Optional[List[str]] = None  # List of peak names
+    gene_names: Optional[List[str]] = None  # Row names of rna (genes)
+    peak_names: Optional[List[str]] = None  # Row names of atac (peaks)
+    cell_names: Optional[List[str]] = None  # Shared column names (cells)
 
     def __post_init__(self):
         """Description:
@@ -76,21 +82,35 @@ class SCENTObject(eqx.Module):
         if missing_covariates:
             raise ValueError(f"Covariates not found in meta_data: {missing_covariates}")
 
-        if isinstance(self.rna, pd.DataFrame) and isinstance(self.atac, pd.DataFrame):
-            if not self.rna.columns.equals(self.atac.columns):
-                raise ValueError("RNA and ATAC matrices must share the same ordered cell columns.")
-
-            missing_cells = sorted(set(self.rna.columns) - set(self.meta_data["cell"]))
+        if self.cell_names is not None:
+            missing_cells = sorted(set(self.cell_names) - set(self.meta_data["cell"]))
             if missing_cells:
                 raise ValueError(f"Some RNA/ATAC cells are missing in meta_data: {missing_cells[:5]}")
 
+        if self.gene_names is not None and self.rna.shape[0] != len(self.gene_names):
+            raise ValueError(
+                f"gene_names length ({len(self.gene_names)}) != RNA matrix rows ({self.rna.shape[0]})"
+            )
+
+        if self.peak_names is not None and self.atac.shape[0] != len(self.peak_names):
+            raise ValueError(
+                f"peak_names length ({len(self.peak_names)}) != ATAC matrix rows ({self.atac.shape[0]})"
+            )
+
+        if self.cell_names is not None and self.rna.shape[1] != len(self.cell_names):
+            raise ValueError(
+                f"cell_names length ({len(self.cell_names)}) != matrix columns ({self.rna.shape[1]})"
+            )
+
         if self.peak_info is not None and self.gene_names is not None and self.peak_names is not None:
+            gene_set = set(self.gene_names)
             genes = self.peak_info.get("genes", [])
-            if not all(gene in self.gene_names for gene in genes):
+            if not all(gene in gene_set for gene in genes):
                 raise ValueError("Some genes in peak_info are not in the RNA matrix")
 
+            peak_set = set(self.peak_names)
             peaks = self.peak_info.get("peaks", [])
-            if not all(peak in self.peak_names for peak in peaks):
+            if not all(peak in peak_set for peak in peaks):
                 raise ValueError("Some peaks in peak_info are not in the ATAC matrix")
 
     @staticmethod
@@ -143,7 +163,7 @@ class SCENTObject(eqx.Module):
         return predictors
 
     @classmethod
-    def _build_design_matrix(cls, df2: pd.DataFrame, covariates: Sequence[str]) -> Tuple[ArrayLike, ArrayLike, List[str]]:
+    def _build_design_matrix(cls, df2: pd.DataFrame, covariates: Sequence[str]) -> Tuple[jnp.ndarray, jnp.ndarray, List[str]]:
         """Description:
             Construct model inputs aligned with exprs ~ atac + covariates.
 
@@ -176,6 +196,24 @@ class SCENTObject(eqx.Module):
         y = jnp.asarray(y_np)
 
         return X, y, feature_names
+
+    @staticmethod
+    def _sparse_row_to_dense(mat, row_idx: int) -> np.ndarray:
+        """Description:
+            Extract a single row from a sparse matrix as a dense 1-D numpy array.
+            Mirrors R's ``object@rna[gene,]`` followed by ``as.numeric()``.
+
+        Args:
+            mat: Sparse matrix (CSR format preferred for efficient row slicing).
+            row_idx: Integer row index.
+
+        Returns:
+            1-D numpy array of float64.
+        """
+        row = mat[row_idx]
+        if sparse.issparse(row):
+            return np.asarray(row.toarray(), dtype=np.float64).ravel()
+        return np.asarray(row, dtype=np.float64).ravel()
 
     def run_scent(
         self,
@@ -213,28 +251,30 @@ class SCENTObject(eqx.Module):
         else:
             raise ValueError(f"Regression type {regr} not supported. Use 'poisson' or 'negbin'.")
 
-        if not isinstance(self.rna, pd.DataFrame) or not isinstance(self.atac, pd.DataFrame):
-            raise ValueError("run_scent currently requires RNA and ATAC as pandas DataFrames.")
+        if self.gene_names is None or self.peak_names is None or self.cell_names is None:
+            raise ValueError("gene_names, peak_names, and cell_names are required for run_scent.")
+
+        # Build name -> row-index lookup dicts (analogous to R Dimnames indexing)
+        gene_to_idx = {name: i for i, name in enumerate(self.gene_names)}
+        peak_to_idx = {name: i for i, name in enumerate(self.peak_names)}
 
         res: List[SCENTResult] = []
         gene_peak_pairs = self._iter_gene_peak_pairs(self.peak_info, self.peak_info_list)
 
         for gene, this_peak in gene_peak_pairs:
-            if gene not in self.rna.index or this_peak not in self.atac.index:
+            if gene not in gene_to_idx or this_peak not in peak_to_idx:
                 continue
 
-            atac_target = pd.DataFrame(
-                {
-                    "cell": self.atac.columns,
-                    "atac": pd.to_numeric(self.atac.loc[this_peak], errors="coerce").to_numpy(dtype=float),
-                }
-            )
+            # Extract single peak row: sparse -> dense (R: object@atac[this_peak,])
+            atac_vec = self._sparse_row_to_dense(self.atac, peak_to_idx[this_peak])
+            atac_target = pd.DataFrame({"cell": self.cell_names, "atac": atac_vec})
 
             if bin_atac:
                 atac_target.loc[atac_target["atac"] > 0, "atac"] = 1.0
 
-            mrna_target = pd.to_numeric(self.rna.loc[gene], errors="coerce")
-            df = pd.DataFrame({"cell": mrna_target.index, "exprs": mrna_target.to_numpy(dtype=float)})
+            # Extract single gene row: sparse -> dense (R: object@rna[gene,])
+            exprs_vec = self._sparse_row_to_dense(self.rna, gene_to_idx[gene])
+            df = pd.DataFrame({"cell": self.cell_names, "exprs": exprs_vec})
             df = df.merge(atac_target, on="cell")
             df = df.merge(self.meta_data, on="cell")
 
