@@ -91,9 +91,15 @@ def _run_bootstrap_stage(
     atac_idx: int,
     obs_coef: float,
     n_boot: int,
+    max_batch_size: int = 5000,
 ) -> Tuple[float, rdm.PRNGKey]:
     """Description:
         Run one adaptive bootstrap stage with a fixed number of replicates.
+
+        When ``n_boot`` exceeds ``max_batch_size`` the replicates are processed
+        in chunks to avoid GPU out-of-memory errors.  Each chunk is a separate
+        ``jax.vmap`` call; the resulting coefficients are concatenated before
+        computing the p-value.
 
     Args:
         X: Design matrix.
@@ -103,6 +109,8 @@ def _run_bootstrap_stage(
         atac_idx: ATAC coefficient index.
         obs_coef: Observed ATAC coefficient.
         n_boot: Number of bootstrap replicates for this stage.
+        max_batch_size: Maximum replicates per ``vmap`` batch. Lower values
+            reduce peak GPU memory at the cost of more sequential batches.
 
     Returns:
         Tuple of stage p-value and advanced PRNG key.
@@ -111,7 +119,21 @@ def _run_bootstrap_stage(
     key, subkey = rdm.split(key)
     indices = rdm.choice(subkey, n, shape=(n_boot, n), replace=True)
 
-    boot_coefs = jax.vmap(lambda idx: bootstrap_regression(X, y, family, idx, atac_idx))(indices)
+    if n_boot <= max_batch_size:
+        boot_coefs = jax.vmap(
+            lambda idx: bootstrap_regression(X, y, family, idx, atac_idx)
+        )(indices)
+    else:
+        # Process in chunks to stay within GPU memory
+        chunks = []
+        for start in range(0, n_boot, max_batch_size):
+            chunk_indices = indices[start : start + max_batch_size]
+            chunk_coefs = jax.vmap(
+                lambda idx: bootstrap_regression(X, y, family, idx, atac_idx)
+            )(chunk_indices)
+            chunks.append(chunk_coefs)
+        boot_coefs = jnp.concatenate(chunks)
+
     p0 = basic_p(obs_coef, boot_coefs)
 
     return p0, key
@@ -125,9 +147,13 @@ def bootstrap_test(
     key: rdm.PRNGKey,
     atac_idx: int = -1,
     obs_coef: Optional[float] = None,
+    max_batch_size: int = 5000,
 ) -> float:
     """Description:
         Perform adaptive bootstrap with stage thresholds aligned to the R implementation.
+
+        Replicates are processed in batches of at most ``max_batch_size`` to
+        keep GPU memory usage bounded.
 
     Args:
         X: Design matrix.
@@ -137,6 +163,7 @@ def bootstrap_test(
         key: JAX PRNG key.
         atac_idx: ATAC coefficient index.
         obs_coef: Optional observed ATAC coefficient; computed if not provided.
+        max_batch_size: Maximum replicates per ``vmap`` batch. Default 5000.
 
     Returns:
         Final adaptive bootstrap p-value.
@@ -150,19 +177,24 @@ def bootstrap_test(
         glm_state = glm.fit(X, y, init=eta, alpha_init=alpha_n, se_estimator=FisherInfoError())
         obs_coef = float(glm_state.beta[atac_idx].item())
 
+    stage_args = dict(
+        X=X, y=y, family=family, atac_idx=atac_idx,
+        obs_coef=obs_coef, max_batch_size=max_batch_size,
+    )
+
     # R path: always run initial stage first, then adaptively rerun with larger R.
-    p0, key = _run_bootstrap_stage(X, y, family, key, atac_idx, obs_coef, initial_samples)
+    p0, key = _run_bootstrap_stage(key=key, n_boot=initial_samples, **stage_args)
 
     if p0 < 0.1:
-        p0, key = _run_bootstrap_stage(X, y, family, key, atac_idx, obs_coef, 500)
+        p0, key = _run_bootstrap_stage(key=key, n_boot=500, **stage_args)
 
     if p0 < 0.05:
-        p0, key = _run_bootstrap_stage(X, y, family, key, atac_idx, obs_coef, 2500)
+        p0, key = _run_bootstrap_stage(key=key, n_boot=2500, **stage_args)
 
     if p0 < 0.01:
-        p0, key = _run_bootstrap_stage(X, y, family, key, atac_idx, obs_coef, 25000)
+        p0, key = _run_bootstrap_stage(key=key, n_boot=25000, **stage_args)
 
     if p0 < 0.001:
-        p0, key = _run_bootstrap_stage(X, y, family, key, atac_idx, obs_coef, 50000)
+        p0, key = _run_bootstrap_stage(key=key, n_boot=50000, **stage_args)
 
     return p0

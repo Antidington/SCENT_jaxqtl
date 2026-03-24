@@ -131,6 +131,7 @@ def _multi_gpu_worker(args: dict) -> List[dict]:
         bin_atac=args["bin_atac"],
         bootstrap_samples=args["bootstrap_samples"],
         min_nonzero_frac=args["min_nonzero_frac"],
+        max_batch_size=args["max_batch_size"],
         key=rdm.PRNGKey(args["seed"]),
         device="gpu",
     )
@@ -341,6 +342,7 @@ class SCENTObject(eqx.Module):
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
         min_nonzero_frac: float = 0.05,
+        max_batch_size: int = 5000,
         gpu_devices: Optional[List[int]] = None,
         key: Optional[rdm.PRNGKey] = None,
         device: str = "auto",
@@ -362,6 +364,9 @@ class SCENTObject(eqx.Module):
             bootstrap_samples: Initial bootstrap sample size (stage-1).
             min_nonzero_frac: Minimum fraction of cells with non-zero expression (RNA) and
                 non-zero accessibility (ATAC) required to test a gene-peak pair. Default 0.05.
+            max_batch_size: Maximum bootstrap replicates per ``vmap`` batch. Larger
+                values are faster but use more GPU memory. Lower this if you hit
+                GPU OOM errors at the 25,000 or 50,000 bootstrap stages. Default 5000.
             gpu_devices: List of GPU device IDs to use (e.g. ``[0]``, ``[0, 1, 2]``).
                 ``None`` (default) falls back to ``device``. If more than one ID is
                 given the run is automatically distributed across those GPUs via
@@ -384,6 +389,7 @@ class SCENTObject(eqx.Module):
                     bin_atac=bin_atac,
                     bootstrap_samples=bootstrap_samples,
                     min_nonzero_frac=min_nonzero_frac,
+                    max_batch_size=max_batch_size,
                     key=key,
                 )
             # Single GPU: override device resolution
@@ -486,6 +492,7 @@ class SCENTObject(eqx.Module):
                     key=pair_key,
                     atac_idx=atac_idx,
                     obs_coef=coef,
+                    max_batch_size=max_batch_size,
                 )
 
                 res.append(
@@ -510,6 +517,7 @@ class SCENTObject(eqx.Module):
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
         min_nonzero_frac: float = 0.05,
+        max_batch_size: int = 5000,
         key: Optional[rdm.PRNGKey] = None,
     ) -> List[SCENTResult]:
         """Description:
@@ -529,6 +537,7 @@ class SCENTObject(eqx.Module):
             bootstrap_samples: Initial bootstrap sample size (stage-1).
             min_nonzero_frac: Minimum non-zero fraction for RNA and ATAC required
                 to test a gene-peak pair.
+            max_batch_size: Maximum bootstrap replicates per ``vmap`` batch.
             key: Optional JAX PRNG key for reproducibility.  Each GPU shard
                 receives an independent sub-key derived from this key.
 
@@ -579,6 +588,7 @@ class SCENTObject(eqx.Module):
             bin_atac=bin_atac,
             bootstrap_samples=bootstrap_samples,
             min_nonzero_frac=min_nonzero_frac,
+            max_batch_size=max_batch_size,
         )
 
         worker_args = []

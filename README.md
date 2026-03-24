@@ -149,12 +149,14 @@ results = scent_obj.run_scent(
 results = scent_obj.run_scent(
     celltype="T_cell",
     gpu_devices=[0],
+    max_batch_size=5000,       # lower if GPU OOM at large bootstrap stages
 )
 
 # Multi-GPU — automatically shards gene-peak pairs across GPUs 0 and 1
 results = scent_obj.run_scent(
     celltype="T_cell",
     gpu_devices=[0, 1],
+    max_batch_size=5000,
 )
 
 # Save results
@@ -183,6 +185,24 @@ Using GPU [0]
 | `None` (default) | Falls back to `device` argument (`"auto"` → GPU 0 if available) |
 | `[0]` | Single-GPU mode on GPU 0 |
 | `[0, 1, 2]` | Multi-GPU mode — pairs sharded round-robin, one subprocess per GPU |
+
+### GPU Memory Tuning
+
+Bootstrap stages up to 50,000 replicates are processed in batches (`max_batch_size=5000` by default) to avoid GPU OOM. Each batch is a separate `jax.vmap` call; results are accumulated before computing the p-value.
+
+| Stage | Replicates | Batches (default) |
+|---|---|---|
+| 1 | 100 | 1 |
+| 2 | 500 | 1 |
+| 3 | 2,500 | 1 |
+| 4 | 25,000 | 5 |
+| 5 | 50,000 | 10 |
+
+If OOM still occurs, reduce `max_batch_size`:
+
+```python
+results = scent_obj.run_scent(celltype="T_cell", gpu_devices=[0], max_batch_size=1000)
+```
 
 ### Input Data Format
 
