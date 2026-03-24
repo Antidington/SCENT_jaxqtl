@@ -255,6 +255,7 @@ class SCENTObject(eqx.Module):
         regr: str = "poisson",
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
+        min_nonzero_frac: float = 0.05,
         key: Optional[rdm.PRNGKey] = None,
         device: str = "auto",
     ) -> List[SCENTResult]:
@@ -268,6 +269,8 @@ class SCENTObject(eqx.Module):
             regr: Regression family, either 'poisson' or 'negbin'.
             bin_atac: Whether to binarize ATAC counts (>0 -> 1).
             bootstrap_samples: Initial bootstrap sample size (stage-1).
+            min_nonzero_frac: Minimum fraction of cells with non-zero expression (RNA) and
+                non-zero accessibility (ATAC) required to test a gene-peak pair. Default 0.05.
             key: Optional JAX PRNG key for reproducibility.
             device: JAX backend to use. ``"auto"`` (default) selects gpu → tpu → cpu
                 in priority order. Also accepts ``"cpu"``, ``"gpu"``, or ``"tpu"``.
@@ -325,7 +328,7 @@ class SCENTObject(eqx.Module):
 
                 nonzero_m = (df2["exprs"] > 0).mean()
                 nonzero_a = (df2["atac"] > 0).mean()
-                if not (nonzero_m > 0.05 and nonzero_a > 0.05):
+                if not (nonzero_m > min_nonzero_frac and nonzero_a > min_nonzero_frac):
                     continue
 
                 X, y, feature_names = self._build_design_matrix(df2, self.covariates)
