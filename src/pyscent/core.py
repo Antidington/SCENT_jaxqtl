@@ -251,7 +251,7 @@ class SCENTObject(eqx.Module):
     def run_scent(
         self,
         celltype: str,
-        ncores: int = 1,
+        ncores: int = 4,
         regr: str = "poisson",
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
@@ -261,11 +261,12 @@ class SCENTObject(eqx.Module):
     ) -> List[SCENTResult]:
         """Description:
             Run SCENT with a code path aligned to the original R implementation.
-            ncores is retained for API compatibility; runtime parallelism is controlled by JAX.
 
         Args:
             celltype: Target cell type label used for filtering.
-            ncores: Compatibility argument; currently not used for explicit threading.
+            ncores: Number of CPU threads for XLA/Eigen parallelism. Only applied when
+                the resolved device is CPU. For best effect, set before JAX initializes
+                (e.g. at the top of your script). Default 4.
             regr: Regression family, either 'poisson' or 'negbin'.
             bin_atac: Whether to binarize ATAC counts (>0 -> 1).
             bootstrap_samples: Initial bootstrap sample size (stage-1).
@@ -278,7 +279,6 @@ class SCENTObject(eqx.Module):
         Returns:
             List of SCENTResult entries for tested gene-peak pairs.
         """
-        del ncores
 
         if key is None:
             key = rdm.PRNGKey(0)
@@ -294,6 +294,16 @@ class SCENTObject(eqx.Module):
             raise ValueError("gene_names, peak_names, and cell_names are required for run_scent.")
 
         target_device = _resolve_device(device)
+
+        # Apply CPU thread count via XLA flags when running on CPU.
+        # Must be set before XLA compiles; works reliably when called before JAX initializes.
+        if target_device.platform == "cpu":
+            import os
+            existing = os.environ.get("XLA_FLAGS", "")
+            os.environ["XLA_FLAGS"] = (
+                f"{existing} --xla_cpu_multi_thread_eigen=true"
+                f" intra_op_parallelism_threads={ncores}"
+            ).strip()
 
         # Build name -> row-index lookup dicts (analogous to R Dimnames indexing)
         gene_to_idx = {name: i for i, name in enumerate(self.gene_names)}
