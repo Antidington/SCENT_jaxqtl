@@ -39,6 +39,7 @@ pySCENT reimplements SCENT in Python using JAX, providing substantial performanc
 ### Key Features
 
 * **GPU/TPU Acceleration**: JAX-based computation enables hardware acceleration
+* **Multi-GPU Support**: Automatically shards gene-peak pairs across multiple GPUs
 * **High Consistency**: Validated against original SCENT
 * **Adaptive Bootstrap Strategy**: Intelligent sampling for efficiency
 * **Vectorized Parallelization**: `jax.vmap` for simultaneous bootstrap execution
@@ -102,6 +103,18 @@ print(jax.devices())          # list available devices
 
 pySCENT does not require any code changes to switch backends — JAX automatically dispatches to the available accelerator. For more details, see the [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html).
 
+### GPU Memory Control
+
+By default JAX pre-allocates 75% of GPU memory. For large datasets set these environment variables **before importing pySCENT**:
+
+```bash
+# Disable preallocation (allocate on demand)
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+# Or cap the fraction (e.g. 40%)
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+```
+
 ---
 
 ## 4. Usage
@@ -122,13 +135,26 @@ scent_obj = io.create_scent_object(
     celltype_col="cell_type"               # Column name for cell type
 )
 
-# Run SCENT analysis for specific cell type
+# CPU (default) — control thread count with ncores
 results = scent_obj.run_scent(
-    celltype="T_cell",                     # Cell type to analyze
-    regr="poisson",                        # Regression model: "poisson" or "negbin"
-    bootstrap_samples=100,                 # Initial bootstrap samples
-    key=random.PRNGKey(42),                # Random seed for reproducibility
-    device="auto",                         # "auto" (gpu>tpu>cpu), "cpu", "gpu", "tpu"
+    celltype="T_cell",
+    regr="poisson",
+    bootstrap_samples=100,
+    min_nonzero_frac=0.05,
+    ncores=4,
+    key=random.PRNGKey(42),
+)
+
+# Single GPU — prints device info, runs on GPU 0
+results = scent_obj.run_scent(
+    celltype="T_cell",
+    gpu_devices=[0],
+)
+
+# Multi-GPU — automatically shards gene-peak pairs across GPUs 0 and 1
+results = scent_obj.run_scent(
+    celltype="T_cell",
+    gpu_devices=[0, 1],
 )
 
 # Save results
@@ -140,6 +166,24 @@ for res in sorted(results, key=lambda x: x.boot_basic_p)[:5]:
           f"Beta: {res.beta:.3f}, P-value: {res.boot_basic_p:.2e}")
 ```
 
+### GPU Device Selection
+
+When a GPU backend is used, pySCENT prints the detected devices to stdout:
+
+```
+Detected 3 GPU device(s):
+  [0] NVIDIA A100-SXM4-80GB | VRAM: 81920 MiB | Load: 12%
+  [1] NVIDIA A100-SXM4-80GB | VRAM: 81920 MiB | Load:  0%
+  [2] NVIDIA A100-SXM4-80GB | VRAM: 81920 MiB | Load:  0%
+Using GPU [0]
+```
+
+| `gpu_devices` | Behaviour |
+|---|---|
+| `None` (default) | Falls back to `device` argument (`"auto"` → GPU 0 if available) |
+| `[0]` | Single-GPU mode on GPU 0 |
+| `[0, 1, 2]` | Multi-GPU mode — pairs sharded round-robin, one subprocess per GPU |
+
 ### Input Data Format
 
 RNA and ATAC matrices are stored internally as sparse matrices (scipy CSR, analogous to R's `dgCMatrix`). The following input formats are supported:
@@ -149,7 +193,7 @@ RNA and ATAC matrices are stored internally as sparse matrices (scipy CSR, analo
 | CSV | `.csv` | First column = row names, header = column names |
 | TSV | `.tsv` | Same as CSV, tab-separated |
 | H5AD | `.h5ad` | `var_names` = row names, `obs_names` = column names (auto-transposed from cells×genes to genes×cells) |
-| MTX | `.mtx`, `.mtx.gz` | Not available (requires CSV/TSV/H5AD for name information) |
+| MTX | `.mtx`, `.mtx.gz` | Auto-loaded from companion `{stem}_genes.tsv` / `{stem}_features.tsv` and `{stem}_barcodes.tsv` files if present alongside the MTX |
 
 **RNA matrix** — genes × cells, raw counts (no normalization):
 ```
