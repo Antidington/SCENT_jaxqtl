@@ -98,46 +98,52 @@ def _resolve_device(device: str) -> jax.Device:
     return devices[0]
 
 
-def _multi_gpu_worker(args: dict) -> List[dict]:
-    """Worker executed in a subprocess for one GPU shard.
+_WORKER_SCRIPT = """\
+\"\"\"Standalone subprocess worker for multi-GPU SCENT execution.
 
-    Sets CUDA_VISIBLE_DEVICES before JAX initializes so the subprocess sees
-    only its assigned GPU as device 0.
-    """
-    import os
+Reads a pickled argument dict from *stdin*, runs SCENT on the single GPU
+selected via CUDA_VISIBLE_DEVICES (set by the parent before launching this
+process), and writes the pickled result list to *stdout*.
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args["device_id"])
+Because this is a fresh Python process — not a fork or spawn of the caller —
+there is no risk of re-executing the user's main module, and JAX is guaranteed
+to see only the assigned GPU at import time.
+\"\"\"
+import os, sys, pickle
 
-    import jax.random as rdm  # noqa: PLC0415 — must import after env var is set
+args = pickle.loads(sys.stdin.buffer.read())
 
-    from pyscent.core import SCENTObject  # noqa: PLC0415
+os.environ["CUDA_VISIBLE_DEVICES"] = str(args["device_id"])
 
-    sub_obj = SCENTObject(
-        rna=args["rna"],
-        atac=args["atac"],
-        meta_data=args["meta_data"],
-        peak_info=args["peak_info"],
-        peak_info_list=args["peak_info_list"],
-        covariates=args["covariates"],
-        celltypes=args["celltypes"],
-        gene_names=args["gene_names"],
-        peak_names=args["peak_names"],
-        cell_names=args["cell_names"],
-    )
+import jax.random as rdm
+from pyscent.core import SCENTObject
 
-    results = sub_obj.run_scent(
-        celltype=args["celltype"],
-        regr=args["regr"],
-        bin_atac=args["bin_atac"],
-        bootstrap_samples=args["bootstrap_samples"],
-        min_nonzero_frac=args["min_nonzero_frac"],
-        max_batch_size=args["max_batch_size"],
-        key=rdm.PRNGKey(args["seed"]),
-        device="gpu",
-    )
+sub_obj = SCENTObject(
+    rna=args["rna"],
+    atac=args["atac"],
+    meta_data=args["meta_data"],
+    peak_info=args["peak_info"],
+    peak_info_list=args["peak_info_list"],
+    covariates=args["covariates"],
+    celltypes=args["celltypes"],
+    gene_names=args["gene_names"],
+    peak_names=args["peak_names"],
+    cell_names=args["cell_names"],
+)
 
-    # NamedTuples must be serialised to plain dicts for inter-process transfer
-    return [r._asdict() for r in results]
+results = sub_obj.run_scent(
+    celltype=args["celltype"],
+    regr=args["regr"],
+    bin_atac=args["bin_atac"],
+    bootstrap_samples=args["bootstrap_samples"],
+    min_nonzero_frac=args["min_nonzero_frac"],
+    max_batch_size=args["max_batch_size"],
+    key=rdm.PRNGKey(args["seed"]),
+    device="gpu",
+)
+
+sys.stdout.buffer.write(pickle.dumps([r._asdict() for r in results]))
+"""
 
 
 class SCENTResult(NamedTuple):
@@ -548,7 +554,9 @@ class SCENTObject(eqx.Module):
         Raises:
             RuntimeError: If no GPU devices are found.
         """
-        import multiprocessing as mp
+        import pickle
+        import subprocess
+        import sys
 
         available = jax.devices("gpu")
         if not available:
@@ -591,7 +599,13 @@ class SCENTObject(eqx.Module):
             max_batch_size=max_batch_size,
         )
 
-        worker_args = []
+        # Launch one subprocess per GPU shard.  Each runs the inline
+        # _WORKER_SCRIPT which reads pickled args from stdin, sets
+        # CUDA_VISIBLE_DEVICES *before* importing JAX, and writes
+        # pickled results to stdout.  This avoids both the spawn
+        # "re-import __main__" problem and the fork "inherited CUDA
+        # context" problem.
+        procs = []
         for i, (dev_id, shard) in enumerate(zip(device_ids, shards)):
             if not shard:
                 continue
@@ -601,7 +615,7 @@ class SCENTObject(eqx.Module):
                 "peaks": [p["peak"] for p in shard],
                 "pairs": [(p["gene"], p["peak"]) for p in shard],
             }
-            worker_args.append({
+            payload = pickle.dumps({
                 **base,
                 "device_id": dev_id,
                 "peak_info": shard_peak_info,
@@ -609,9 +623,35 @@ class SCENTObject(eqx.Module):
                 "seed": int(jnp.asarray(shard_key)[0]),
             })
 
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=n_gpus) as pool:
-            shard_results = pool.map(_multi_gpu_worker, worker_args)
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _WORKER_SCRIPT],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            procs.append((dev_id, proc, payload))
 
-        # Flatten and restore SCENTResult NamedTuples
-        return [SCENTResult(**r) for shard in shard_results for r in shard]
+        # Feed data and collect results in parallel using threads.
+        # Each thread runs communicate(input=payload) on one subprocess,
+        # so all workers receive their data and execute simultaneously.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _feed_and_collect(item):
+            dev_id, proc, payload = item
+            stdout, stderr = proc.communicate(input=payload)
+            return dev_id, proc.returncode, stdout, stderr
+
+        with ThreadPoolExecutor(max_workers=len(procs)) as executor:
+            outcomes = list(executor.map(_feed_and_collect, procs))
+
+        all_results: List[SCENTResult] = []
+        for dev_id, returncode, stdout, stderr in outcomes:
+            if returncode != 0:
+                raise RuntimeError(
+                    f"GPU [{dev_id}] worker failed (exit {returncode}):\n"
+                    f"{stderr.decode()}"
+                )
+            shard_res = pickle.loads(stdout)
+            all_results.extend(SCENTResult(**r) for r in shard_res)
+
+        return all_results
