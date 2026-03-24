@@ -33,10 +33,33 @@ def read_matrix(
         row_names / col_names may be None when names are unavailable (e.g. MTX).
     """
     if file_path.endswith(".mtx") or file_path.endswith(".mtx.gz"):
+        import os
         from scipy.io import mmread
 
         mat = mmread(file_path)
-        return sparse.csr_matrix(mat), None, None
+
+        # Look for companion name files: {stem}_genes.tsv / {stem}_features.tsv
+        # and {stem}_barcodes.tsv (exported by the R conversion script)
+        stem = file_path[: file_path.index(".mtx")]
+        base_dir = os.path.dirname(stem)
+        base_name = os.path.basename(stem)
+
+        row_names = None
+        col_names = None
+
+        for suffix in (f"{base_name}_genes.tsv", f"{base_name}_features.tsv"):
+            candidate = os.path.join(base_dir, suffix)
+            if os.path.exists(candidate):
+                with open(candidate) as f:
+                    row_names = [line.rstrip("\n") for line in f]
+                break
+
+        barcode_candidate = os.path.join(base_dir, f"{base_name}_barcodes.tsv")
+        if os.path.exists(barcode_candidate):
+            with open(barcode_candidate) as f:
+                col_names = [line.rstrip("\n") for line in f]
+
+        return sparse.csr_matrix(mat), row_names, col_names
 
     if file_path.endswith(".h5ad"):
         import anndata
@@ -93,10 +116,16 @@ def create_scent_object(
     rna, gene_names, rna_cell_names = read_matrix(rna_matrix)
     atac, peak_names, atac_cell_names = read_matrix(atac_matrix)
 
-    # Determine cell names
+    # Determine cell names; reorder ATAC columns to match RNA if needed
     if rna_cell_names is not None and atac_cell_names is not None:
         if rna_cell_names != atac_cell_names:
-            raise ValueError("RNA and ATAC matrices must have identical ordered cell columns.")
+            if set(rna_cell_names) != set(atac_cell_names):
+                raise ValueError("RNA and ATAC matrices do not share the same set of cells.")
+            # Same cells, different order — reindex ATAC columns to RNA order
+            atac_col_index = {name: i for i, name in enumerate(atac_cell_names)}
+            col_perm = [atac_col_index[c] for c in rna_cell_names]
+            atac = atac[:, col_perm]
+            atac_cell_names = rna_cell_names
         cell_names = rna_cell_names
     elif rna_cell_names is not None:
         cell_names = rna_cell_names
