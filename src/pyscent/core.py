@@ -22,6 +22,50 @@ from jaxqtl.infer.stderr import FisherInfoError
 from .bootstrap import bootstrap_test
 
 
+def _print_gpu_info() -> int:
+    """Print detected GPU devices with model, VRAM, and current load to stdout.
+
+    Tries ``nvidia-smi`` first (NVIDIA), then falls back to JAX device listing.
+
+    Returns:
+        Number of GPU devices detected.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+            print(f"Detected {len(lines)} GPU device(s):")
+            for line in lines:
+                idx, name, vram, load = [x.strip() for x in line.split(",")]
+                print(f"  [{idx}] {name} | VRAM: {vram} MiB | Load: {load}%")
+            return len(lines)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback: JAX device listing (works for Metal / TPU / any JAX backend)
+    try:
+        devices = jax.devices("gpu")
+        print(f"Detected {len(devices)} GPU device(s):")
+        for d in devices:
+            print(f"  [{d.id}] {d}")
+        return len(devices)
+    except RuntimeError:
+        pass
+
+    return 0
+
+
 def _resolve_device(device: str) -> jax.Device:
     """Description:
         Resolve a device string to a concrete ``jax.Device`` instance.
@@ -52,6 +96,47 @@ def _resolve_device(device: str) -> jax.Device:
     if not devices:
         raise ValueError(f"No {device} device found.")
     return devices[0]
+
+
+def _multi_gpu_worker(args: dict) -> List[dict]:
+    """Worker executed in a subprocess for one GPU shard.
+
+    Sets CUDA_VISIBLE_DEVICES before JAX initializes so the subprocess sees
+    only its assigned GPU as device 0.
+    """
+    import os
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args["device_id"])
+
+    import jax.random as rdm  # noqa: PLC0415 — must import after env var is set
+
+    from pyscent.core import SCENTObject  # noqa: PLC0415
+
+    sub_obj = SCENTObject(
+        rna=args["rna"],
+        atac=args["atac"],
+        meta_data=args["meta_data"],
+        peak_info=args["peak_info"],
+        peak_info_list=args["peak_info_list"],
+        covariates=args["covariates"],
+        celltypes=args["celltypes"],
+        gene_names=args["gene_names"],
+        peak_names=args["peak_names"],
+        cell_names=args["cell_names"],
+    )
+
+    results = sub_obj.run_scent(
+        celltype=args["celltype"],
+        regr=args["regr"],
+        bin_atac=args["bin_atac"],
+        bootstrap_samples=args["bootstrap_samples"],
+        min_nonzero_frac=args["min_nonzero_frac"],
+        key=rdm.PRNGKey(args["seed"]),
+        device="gpu",
+    )
+
+    # NamedTuples must be serialised to plain dicts for inter-process transfer
+    return [r._asdict() for r in results]
 
 
 class SCENTResult(NamedTuple):
@@ -256,11 +341,16 @@ class SCENTObject(eqx.Module):
         bin_atac: bool = True,
         bootstrap_samples: int = 100,
         min_nonzero_frac: float = 0.05,
+        gpu_devices: Optional[List[int]] = None,
         key: Optional[rdm.PRNGKey] = None,
         device: str = "auto",
     ) -> List[SCENTResult]:
         """Description:
             Run SCENT with a code path aligned to the original R implementation.
+
+            When ``gpu_devices`` is provided it takes precedence over ``device``:
+            a single-element list uses that GPU; a multi-element list automatically
+            dispatches to ``run_scent_multi_gpu``.
 
         Args:
             celltype: Target cell type label used for filtering.
@@ -272,13 +362,32 @@ class SCENTObject(eqx.Module):
             bootstrap_samples: Initial bootstrap sample size (stage-1).
             min_nonzero_frac: Minimum fraction of cells with non-zero expression (RNA) and
                 non-zero accessibility (ATAC) required to test a gene-peak pair. Default 0.05.
+            gpu_devices: List of GPU device IDs to use (e.g. ``[0]``, ``[0, 1, 2]``).
+                ``None`` (default) falls back to ``device``. If more than one ID is
+                given the run is automatically distributed across those GPUs via
+                ``run_scent_multi_gpu``.
             key: Optional JAX PRNG key for reproducibility.
             device: JAX backend to use. ``"auto"`` (default) selects gpu → tpu → cpu
                 in priority order. Also accepts ``"cpu"``, ``"gpu"``, or ``"tpu"``.
+                Ignored when ``gpu_devices`` is set.
 
         Returns:
             List of SCENTResult entries for tested gene-peak pairs.
         """
+        # --- gpu_devices routing ---
+        if gpu_devices is not None:
+            if len(gpu_devices) > 1:
+                return self.run_scent_multi_gpu(
+                    celltype=celltype,
+                    device_ids=gpu_devices,
+                    regr=regr,
+                    bin_atac=bin_atac,
+                    bootstrap_samples=bootstrap_samples,
+                    min_nonzero_frac=min_nonzero_frac,
+                    key=key,
+                )
+            # Single GPU: override device resolution
+            device = "gpu"
 
         if key is None:
             key = rdm.PRNGKey(0)
@@ -294,6 +403,19 @@ class SCENTObject(eqx.Module):
             raise ValueError("gene_names, peak_names, and cell_names are required for run_scent.")
 
         target_device = _resolve_device(device)
+
+        if target_device.platform == "cuda" or target_device.platform == "gpu":
+            n_gpus = _print_gpu_info()
+            # Pin to the requested device ID when gpu_devices=[id] was given
+            if gpu_devices is not None and len(gpu_devices) == 1:
+                all_gpu = jax.devices("gpu")
+                dev_id = gpu_devices[0]
+                if dev_id >= len(all_gpu):
+                    raise ValueError(f"GPU device {dev_id} not found ({len(all_gpu)} available).")
+                target_device = all_gpu[dev_id]
+                print(f"Using GPU [{dev_id}]")
+            else:
+                print(f"Using GPU [0] (default)")
 
         # Apply CPU thread count via XLA flags when running on CPU.
         # Must be set before XLA compiles; works reliably when called before JAX initializes.
@@ -379,3 +501,107 @@ class SCENTObject(eqx.Module):
                 )
 
         return res
+
+    def run_scent_multi_gpu(
+        self,
+        celltype: str,
+        device_ids: Optional[List[int]] = None,
+        regr: str = "poisson",
+        bin_atac: bool = True,
+        bootstrap_samples: int = 100,
+        min_nonzero_frac: float = 0.05,
+        key: Optional[rdm.PRNGKey] = None,
+    ) -> List[SCENTResult]:
+        """Description:
+            Run SCENT distributed across multiple GPUs by sharding gene-peak pairs.
+
+            Gene-peak pairs are split round-robin across the selected GPUs.  Each
+            GPU runs in an isolated subprocess (``spawn`` context) so that
+            ``CUDA_VISIBLE_DEVICES`` is set before JAX initialises, giving every
+            worker exclusive access to its assigned device.
+
+        Args:
+            celltype: Target cell type label used for filtering.
+            device_ids: List of GPU device indices to use (e.g. ``[0, 1, 2]``).
+                ``None`` (default) uses all available GPUs.
+            regr: Regression family, either ``'poisson'`` or ``'negbin'``.
+            bin_atac: Whether to binarize ATAC counts (>0 -> 1).
+            bootstrap_samples: Initial bootstrap sample size (stage-1).
+            min_nonzero_frac: Minimum non-zero fraction for RNA and ATAC required
+                to test a gene-peak pair.
+            key: Optional JAX PRNG key for reproducibility.  Each GPU shard
+                receives an independent sub-key derived from this key.
+
+        Returns:
+            Combined list of SCENTResult entries from all GPU shards, ordered by
+            shard (i.e. round-robin pair order is preserved within each shard).
+
+        Raises:
+            RuntimeError: If no GPU devices are found.
+        """
+        import multiprocessing as mp
+
+        available = jax.devices("gpu")
+        if not available:
+            raise RuntimeError(
+                "No GPU devices found. Use run_scent() with device='cpu' instead."
+            )
+
+        _print_gpu_info()
+
+        if device_ids is None:
+            device_ids = list(range(len(available)))
+
+        n_gpus = len(device_ids)
+        print(f"Multi-GPU mode: distributing pairs across GPU(s) {device_ids}")
+        pairs = self.peak_info_list or []
+        if not pairs:
+            return []
+
+        if key is None:
+            key = rdm.PRNGKey(0)
+
+        # Round-robin shard: pairs[0] → GPU0, pairs[1] → GPU1, …
+        shards = [pairs[i::n_gpus] for i in range(n_gpus)]
+
+        # Shared object data passed to every worker (pickled once per worker)
+        base = dict(
+            rna=self.rna,
+            atac=self.atac,
+            meta_data=self.meta_data,
+            covariates=self.covariates,
+            celltypes=self.celltypes,
+            gene_names=self.gene_names,
+            peak_names=self.peak_names,
+            cell_names=self.cell_names,
+            celltype=celltype,
+            regr=regr,
+            bin_atac=bin_atac,
+            bootstrap_samples=bootstrap_samples,
+            min_nonzero_frac=min_nonzero_frac,
+        )
+
+        worker_args = []
+        for i, (dev_id, shard) in enumerate(zip(device_ids, shards)):
+            if not shard:
+                continue
+            shard_key = rdm.fold_in(key, i)
+            shard_peak_info = {
+                "genes": [p["gene"] for p in shard],
+                "peaks": [p["peak"] for p in shard],
+                "pairs": [(p["gene"], p["peak"]) for p in shard],
+            }
+            worker_args.append({
+                **base,
+                "device_id": dev_id,
+                "peak_info": shard_peak_info,
+                "peak_info_list": shard,
+                "seed": int(jnp.asarray(shard_key)[0]),
+            })
+
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(processes=n_gpus) as pool:
+            shard_results = pool.map(_multi_gpu_worker, worker_args)
+
+        # Flatten and restore SCENTResult NamedTuples
+        return [SCENTResult(**r) for shard in shard_results for r in shard]
